@@ -1,4 +1,3 @@
-// backend/server.js
 import express from 'express';
 import cors from 'cors';
 // MODIFICAÇÃO DE IMPORTAÇÃO (Para corrigir o erro 'LocalAuth not found')
@@ -169,7 +168,7 @@ function broadcastToClients(data) {
 }
 
 // ============================================
-// INICIALIZAR WHATSAPP
+// INICIALIZAR WHATSAPP (COM DISFARCES)
 // ============================================
 
 async function initializeWhatsApp() {
@@ -186,16 +185,14 @@ async function initializeWhatsApp() {
     
     whatsappClient = new Client({
       authStrategy: new LocalAuth({
-        // ===== ALTERAÇÃO 1: ID DE SESSÃO FIXO =====
-        clientId: 'orb-crm-main-session' // <<-- MUDADO DE 'Date.now()' PARA UM ID FIXO
-        // ==========================================
+        // ID DE SESSÃO FIXO (Para reconexão estável)
+        clientId: 'orb-crm-main-session' 
       }),
       puppeteer: {
         headless: true,
-        // ===== ALTERAÇÃO 2: DISFARCE DE NAVEGADOR =====
-        // <<-- ADICIONADA A LINHA 'userAgent' ABAIXO
+        // DISFARCE DE NAVEGADOR (Para parecer humano)
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-        // ===============================================
+        // ARGUMENTOS AVANÇADOS DE INVISIBILIDADE
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -203,7 +200,11 @@ async function initializeWhatsApp() {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu'
+          '--disable-gpu',
+          // <<-- NOVOS ARGUMENTOS "INVISÍVEIS" -->>
+          '--disable-blink-features=AutomationControlled', // Esconde o "navigator.webdriver"
+          '--window-size=1920,1080', // Simula um ecrã real
+          '--lang=pt-BR,pt' // Define o idioma
         ]
       }
     });
@@ -307,7 +308,7 @@ app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
           redirect_uri: process.env.REDIRECT_URI,
           code: code
         })
-  t   }
+      } // <<-- O 't' SOLTO ESTAVA AQUI E FOI REMOVIDO
     );
     const data = await response.json();
     res.json(data);
@@ -332,7 +333,7 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
     });
     const data = await response.json();
     res.json(data);
-  } catch (error) {
+s  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
