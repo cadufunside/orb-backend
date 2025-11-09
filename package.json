@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
   "version": "1.0.0",
-  "description": "Backend para Orb CRM com WhatsApp Web.js",
+  "description": "Backend para Orb CRM com WhatsApp Web.js - Defesa Máxima",
   "main": "server.js",
   "type": "module",
   "engines": {
