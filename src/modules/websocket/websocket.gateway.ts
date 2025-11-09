@@ -9,9 +9,7 @@ import { Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
 @WsGateway({ cors: { origin: '*' } })
-export class RealtimeGateway
-  implements OnGatewayConnection, OnGatewayDisconnect
-{
+export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
   private readonly logger = new Logger(RealtimeGateway.name);
 
