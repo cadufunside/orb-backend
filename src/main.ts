@@ -3,10 +3,8 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-
-  // Cloud Run injeta PORT=8080. Railway injeta uma PORT própria.
-  const port = Number(process.env.PORT) || 8080;
+  const port = Number(process.env.PORT) || 8080; // compatível com Cloud Run e Railway
   await app.listen(port, '0.0.0.0');
-  console.log(`🚀 Server up on 0.0.0.0:${port}`);
+  console.log(`🚀 Aplicação rodando na porta ${port}`);
 }
 bootstrap();
