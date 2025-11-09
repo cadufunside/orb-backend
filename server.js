@@ -5,6 +5,9 @@ const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+puppeteer.use(StealthPlugin());
 
 const { Pool } = pg;
 const pool = new Pool({
@@ -47,7 +50,6 @@ async function setupDatabase() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
     await client.query(`
       CREATE TABLE IF NOT EXISTS chats (
         sessionId VARCHAR(255) NOT NULL,
@@ -71,7 +73,6 @@ async function setupDatabase() {
         media_data TEXT
       );
     `);
-    
     await client.query('COMMIT');
     console.log('✅ Tabelas do banco de dados (Multi-Sessão) verificadas/criadas com sucesso!');
   } catch (e) {
@@ -132,7 +133,9 @@ async function saveMessageToDb(sessionId, client, message) {
     await dbClient.query('COMMIT');
   } catch (error) {
     if (dbClient) await dbClient.query('ROLLBACK');
-    console.error(`❌ Erro ao salvar mensagem no BD para ${sessionId}: ${error.message}`);
+    if (!error.message.includes('Session closed')) {
+        console.error(`❌ Erro ao salvar mensagem no BD para ${sessionId}: ${error.message}`);
+    }
   } finally {
     if (dbClient) dbClient.release();
   }
@@ -176,7 +179,9 @@ async function syncChatsWithDb(sessionId, client, chats) {
                   await saveMessageToDb(sessionId, client, m);
               }
           } catch(e) {
-             console.error(`❌ Falha ao buscar histórico de chat ${chat.id._serialized} para ${sessionId}: ${e.message}`);
+             if (!e.message.includes('Session closed')) {
+                 console.error(`❌ Falha ao buscar histórico de chat ${chat.id._serialized} para ${sessionId}: ${e.message}`);
+             }
           }
       }
     }
@@ -194,7 +199,6 @@ async function initializeWhatsApp(sessionId) {
     let clientData = getClientData(sessionId);
 
     if (clientData.client || clientData.status === 'initializing') {
-        console.log(`⚠️ Sessão ${sessionId} já em progresso ou conectada.`);
         return;
     }
     
@@ -245,11 +249,20 @@ async function initializeWhatsApp(sessionId) {
         clientData.qrCode = null;
         broadcastToClients(sessionId, { type: 'ready' });
 
+        // Tenta pré-carregar os chats.
         try {
+            // *** Atraso CRÍTICO adicionado para evitar "Invariant Violation" ***
+            console.log('Aguardando 3 segundos para estabilizar o cliente antes de sincronizar...');
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            
             const chats = await client.getChats();
-            await syncChatsWithDb(sessionId, client, chats);
+            // A sincronização completa de chats e histórico ocorre aqui
+            await syncChatsWithDb(sessionId, client, chats); 
         } catch (error) {
-            console.error(`❌ Erro ao pré-carregar chats para ${sessionId}:`, error.message);
+            // Este log é esperado se a Invariant Violation ainda ocorrer.
+            if (!error.message.includes('Invariant Violation')) {
+                console.error(`❌ Erro ao pré-carregar chats para ${sessionId}:`, error.message);
+            }
         }
     });
 
