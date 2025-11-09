@@ -1,4 +1,4 @@
-// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v9 - 100% LIMPO)
+// BACKEND COM PERSISTÊNCIA DE MENSAGENS E MÍDIA (v10 - 100% LIMPO)
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -19,12 +19,14 @@ const pool = new Pool({
 });
 
 // ============================================
-// FUNÇÃO: CRIAR TABELAS AUTOMATICAMENTE
+// FUNÇÃO: CRIAR/ATUALIZAR TABELAS AUTOMATICAMENTE
 // ============================================
 async function setupDatabase() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    
+    // SQL para criar a tabela de chats
     await client.query(`
       CREATE TABLE IF NOT EXISTS chats (
         id VARCHAR(255) PRIMARY KEY,
@@ -34,6 +36,8 @@ async function setupDatabase() {
         lastMessageTimestamp TIMESTAMPTZ
       );
     `);
+    
+    // SQL para criar a tabela de mensagens
     await client.query(`
       CREATE TABLE IF NOT EXISTS messages (
         id VARCHAR(255) PRIMARY KEY,
@@ -44,13 +48,23 @@ async function setupDatabase() {
         type VARCHAR(100)
       );
     `);
+    
+    // ================================================================
+    // NOVA ATUALIZAÇÃO: Adiciona a coluna para guardar imagens/mídia
+    // ================================================================
+    await client.query(`
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_data TEXT;
+    `);
+
+    // SQL para criar os índices (para velocidade)
     await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_chatId ON messages(chatId);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);`);
+    
     await client.query('COMMIT');
     console.log('✅ Tabelas do banco de dados verificadas/criadas com sucesso!');
   } catch (e) {
     await client.query('ROLLBACK');
-    console.error('❌ Erro ao criar tabelas:', e);
+    console.error('❌ Erro ao criar/atualizar tabelas:', e);
     throw e;
   } finally {
     client.release();
@@ -250,7 +264,7 @@ async function saveMessageToDb(message) {
     const timestamp = new Date(message.timestamp * 1000);
 
     if (message.type === 'call_log' || message.type === 'e2e_notification' || !message.id || !chatId) {
-      return;
+      return; // Ignora mensagens de status
     }
 
     client = await pool.connect();
@@ -265,20 +279,40 @@ async function saveMessageToDb(message) {
       [chatId, chat.name || chat.id.user || 'Sem nome', chat.isGroup]
     );
     
-    // 2. Salva a mensagem
+    // ================================================================
+    // MUDANÇA PRINCIPAL: FAZER DOWNLOAD DA MÍDIA SE ELA EXISTIR
+    // ================================================================
+    let mediaData = null;
+    if (message.hasMedia) {
+      console.log(`... Mensagem [${message.id._serialized}] tem mídia. Fazendo download...`);
+      try {
+        const media = await message.downloadMedia();
+        if (media) {
+          // Guarda a imagem/vídeo como um texto longo (Base64)
+          mediaData = `data:${media.mimetype};base64,${media.data}`;
+          console.log(`... Download da mídia [${message.id._serialized}] concluído.`);
+        }
+      } catch (e) {
+        console.error(`❌ Falha no download da mídia [${message.id._serialized}]: ${e.message}`);
+      }
+    }
+    // ================================================================
+    
+    // 2. Salva a mensagem (agora com a coluna media_data)
     await client.query(
-      `INSERT INTO messages (id, chatId, body, fromMe, timestamp, type)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (id) DO NOTHING`, // Ignora se a mensagem já existir
-      [message.id._serialized, chatId, message.body, message.fromMe, timestamp, message.type]
+      `INSERT INTO messages (id, chatId, body, fromMe, timestamp, type, media_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (id) DO NOTHING`,
+      [message.id._serialized, chatId, message.body, message.fromMe, timestamp, message.type, mediaData]
     );
 
     // 3. Atualiza o chat com a última mensagem
+    const lastMessageBody = message.type === 'image' ? (message.body || '[Imagem]') : message.body;
     await client.query(
       `UPDATE chats
        SET lastMessageBody = $1, lastMessageTimestamp = $2
        WHERE id = $3`,
-      [message.body, timestamp, chatId]
+      [lastMessageBody, timestamp, chatId]
     );
     
     await client.query('COMMIT');
@@ -302,6 +336,7 @@ async function syncChatsWithDb(chats) {
 
       const lastMsg = chat.lastMessage;
       const lastMsgTime = lastMsg ? new Date(lastMsg.timestamp * 1000) : null;
+      const lastMessageBody = lastMsg?.type === 'image' ? (lastMsg.body || '[Imagem]') : lastMsg?.body;
 
       await client.query(
         `INSERT INTO chats (id, name, isGroup, lastMessageBody, lastMessageTimestamp)
@@ -314,7 +349,7 @@ async function syncChatsWithDb(chats) {
           chat.id._serialized,
           chat.name || chat.id.user || 'Sem nome',
           chat.isGroup,
-          lastMsg?.body || null,
+          lastMessageBody || null,
           lastMsgTime
         ]
       );
@@ -348,4 +383,161 @@ async function initializeWhatsApp() {
     
     whatsappClient = new Client({
       authStrategy: new LocalAuth({
-        clientId: 'orb-crm-main-session'
+        clientId: 'orb-crm-main-session' 
+      }),
+      puppeteer: {
+        headless: true,
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--disable-blink-features=AutomationControlled',
+a       '--window-size=1920,1080',
+          '--lang=pt-BR,pt'
+        ]
+      }
+    });
+    
+    whatsappClient.on('qr', async (qr) => {
+      console.log('📱 QR Code gerado!');
+      clientStatus = 'qr_ready';
+      try {
+        currentQR = await qrcode.toDataURL(qr);
+        broadcastToClients({ type: 'qr', qr: currentQR });
+      } catch (error) {
+        console.error('❌ Erro ao converter QR:', error);
+      }
+    });
+    
+    whatsappClient.on('authenticated', () => {
+      console.log('✅ WhatsApp autenticado!');
+      clientStatus = 'authenticated';
+      sessionData = { authenticated: true, timestamp: Date.now() };
+      broadcastToClients({ type: 'authenticated', session: sessionData });
+    });
+    
+    whatsappClient.on('ready', async () => {
+      console.log('✅ WhatsApp pronto!');
+      clientStatus = 'ready';
+      currentQR = null;
+      broadcastToClients({ type: 'ready' });
+
+      try {
+        const chats = await whatsappClient.getChats();
+        await syncChatsWithDb(chats);
+      } catch (error) {
+        console.error('❌ Erro ao pré-carregar chats:', error);
+      }
+    });
+    
+    whatsappClient.on('loading_screen', (percent, message) => {
+      console.log(`⏳ Carregando: ${percent}%`);
+      broadcastToClients({ type: 'loading_screen', percent, message });
+    });
+    
+    whatsappClient.on('disconnected', (reason) => {
+      console.log(`❌ WhatsApp desconectado: ${reason}`);
+      clientStatus = 'disconnected';
+      currentQR = null;
+      whatsappClient = null;
+      broadcastToClients({ type: 'disconnected', reason });
+
+      setTimeout(() => {
+        console.log('Tentando reconectar automaticamente...');
+        initializeWhatsApp();
+      }, 10000);
+  S   });
+    
+    whatsappClient.on('message_create', async (message) => {
+      try {
+        await saveMessageToDb(message);
+        const chatId = message.fromMe ? message.to : message.from;
+        console.log('📨 Nova mensagem salva no BD para ' + chatId);
+
+        broadcastToClients({
+          type: 'message',
+          chatId: chatId,
+          message: {
+            id: message.id._serialized,
+            body: message.body,
+            fromMe: message.fromMe,
+            timestamp: message.timestamp * 1000,
+            type: message.type,
+            media_data: (await message.hasMedia) ? `data:${message.mimetype};base64,${(await message.downloadMedia()).data}` : null
+          }
+        });
+      } catch (error) {
+        console.error(`Erro ao processar message_create: ${error.message}`);
+      }
+    });
+    
+    await whatsappClient.initialize();
+    console.log('🔄 Cliente inicializado');
+    
+  } catch (error) {
+    console.error('❌ Erro ao inicializar WhatsApp:', error);
+    clientStatus = 'error';
+    currentQR = null;
+    whatsappClient = null; 
+    broadcastToClients({ type: 'error', message: error.message });
+  }
+}
+
+// ============================================
+// OAUTH TOKEN EXCHANGE (CÓDIGO CORRIGIDO)
+// ============================================
+app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
+  try {
+    const { code } = req.body;
+    const response = await fetch(
+      'https://graph.facebook.com/v18.0/oauth/access_token',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: process.env.FB_APP_ID,
+          client_secret: process.env.FB_APP_SECRET,
+          redirect_uri: process.env.REDIRECT_URI,
+          code: code
+        })
+      }
+    );
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/oauth/google/token-exchange', async (req, res) => {
+  try {
+    const { code } = req.body;
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: process.env.REDIRECT_URI,
+        grant_type: 'authorization_code',
+      }),
+    });
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Lidar com erros não tratados
+process.on('unhandledRejection', (error) => console.error('Unhandled Rejection:', error));
+process.on('uncaughtException', (error) => console.error('Uncaught Exception:', error));
+
+// INICIA O SERVIDOR
+startServer();
