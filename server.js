@@ -1,4 +1,4 @@
-// BACKEND COM PERSISTÊNCIA E CRIAÇÃO AUTOMÁTICA DE TABELAS
+// BACKEND COM PERSISTÊNCIA E CRIAÇÃO AUTOMÁTICA DE TABELAS (VERSÃO 100% CORRIGIDA)
 import express from 'express';
 import cors from 'cors';
 // Importação correta para whatsapp-web.js
@@ -185,9 +185,8 @@ async function startServer() {
               if (whatsappClient && clientStatus === 'ready') {
                 const chatId = data.chatId;
                 console.log(`Buscando mensagens do BD para ${chatId}`);
-                // Busca as mensagens em ordem correta (ASC)
                 const dbResult = await pool.query(
-                  'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC LIMIT 100',
+                  'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC LIMIT 100', // ASC para ordem correta
                   [chatId]
                 );
                 
@@ -199,14 +198,12 @@ async function startServer() {
                   for (const m of messages) {
                     await saveMessageToDb(m);
                   }
-                  // Busca de novo no banco após o backfill
                   const newDbResult = await pool.query(
                     'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC LIMIT 100',
                     [chatId]
                   );
                   ws.send(JSON.stringify({ type: 'messages', chatId, messages: newDbResult.rows }));
                 } else {
-                  // Envia as mensagens do banco
                   ws.send(JSON.stringify({ type: 'messages', chatId, messages: dbResult.rows }));
                 }
               }
@@ -254,6 +251,15 @@ async function startServer() {
 // FUNÇÕES AUXILIARES DO BANCO DE DADOS
 // ============================================
 
+function broadcastToClients(data) {
+  const message = JSON.stringify(data);
+  wsClients.forEach(client => {
+    if (client.readyState === 1) {
+      client.send(message);
+    }
+  });
+}
+
 async function saveMessageToDb(message) {
   let client;
   try {
@@ -261,7 +267,7 @@ async function saveMessageToDb(message) {
     const timestamp = new Date(message.timestamp * 1000);
 
     // Ignora mensagens de status (ex: "chamada de voz perdida")
-    if (message.type === 'call_log' || message.type === 'e2e_notification' || !message.body) {
+    if (message.type === 'call_log' || message.type === 'e2e_notification' || !message.id || !chatId) {
       return;
     }
 
@@ -375,4 +381,152 @@ async function initializeWhatsApp() {
           '--no-first-run',
           '--no-zygote',
           '--disable-gpu',
-          '--
+          '--disable-blink-features=AutomationControlled',
+          '--window-size=1920,1080',
+          '--lang=pt-BR,pt'
+        ]
+      }
+    });
+    
+    whatsappClient.on('qr', async (qr) => {
+      console.log('📱 QR Code gerado!');
+      clientStatus = 'qr_ready';
+      try {
+        currentQR = await qrcode.toDataURL(qr);
+        broadcastToClients({ type: 'qr', qr: currentQR });
+      } catch (error) {
+        console.error('❌ Erro ao converter QR:', error);
+      }
+    });
+    
+    whatsappClient.on('authenticated', () => {
+      console.log('✅ WhatsApp autenticado!');
+      clientStatus = 'authenticated';
+      sessionData = { authenticated: true, timestamp: Date.now() };
+      broadcastToClients({ type: 'authenticated', session: sessionData });
+    });
+    
+    whatsappClient.on('ready', async () => {
+      console.log('✅ WhatsApp pronto!');
+      clientStatus = 'ready';
+      currentQR = null;
+      broadcastToClients({ type: 'ready' });
+
+      // Sincroniza todos os chats com o banco de dados
+      try {
+        const chats = await whatsappClient.getChats();
+        await syncChatsWithDb(chats);
+      } catch (error) {
+        console.error('❌ Erro ao pré-carregar chats:', error);
+      }
+    });
+    
+    whatsappClient.on('loading_screen', (percent, message) => {
+      console.log(`⏳ Carregando: ${percent}%`);
+      broadcastToClients({ type: 'loading_screen', percent, message });
+    });
+    
+    whatsappClient.on('disconnected', (reason) => {
+      console.log(`❌ WhatsApp desconectado: ${reason}`);
+      clientStatus = 'disconnected';
+      currentQR = null;
+      whatsappClient = null;
+      broadcastToClients({ type: 'disconnected', reason });
+
+      // Tenta reconectar após 10 segundos
+      setTimeout(() => {
+        console.log('Tentando reconectar automaticamente...');
+        initializeWhatsApp();
+      }, 10000);
+    });
+    
+    whatsappClient.on('message_create', async (message) => {
+      // Salva CADA mensagem (enviada ou recebida) no banco
+      try {
+        await saveMessageToDb(message);
+        const chatId = message.fromMe ? message.to : message.from;
+        console.log('📨 Nova mensagem salva no BD para ' + chatId);
+
+        // Envia a mensagem para o frontend
+        broadcastToClients({
+          type: 'message',
+          chatId: chatId,
+          message: {
+            id: message.id._serialized,
+            body: message.body,
+            fromMe: message.fromMe,
+            timestamp: message.timestamp * 1000,
+            type: message.type
+          }
+        });
+      } catch (error) {
+        console.error(`Erro ao processar message_create: ${error.message}`);
+      }
+    });
+    
+    // Inicializar
+    await whatsappClient.initialize();
+    console.log('🔄 Cliente inicializado');
+    
+  } catch (error) {
+    console.error('❌ Erro ao inicializar WhatsApp:', error);
+    clientStatus = 'error';
+    currentQR = null;
+    whatsappClient = null; // Garante que podemos tentar de novo
+    broadcastToClients({ type: 'error', message: error.message });
+  }
+}
+
+// ============================================
+// OAUTH TOKEN EXCHANGE (CÓDIGO CORRIGIDO)
+// ============================================
+app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
+  try {
+    const { code } = req.body;
+    const response = await fetch(
+      'https://graph.facebook.com/v18.0/oauth/access_token',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: process.env.FB_APP_ID,
+          client_secret: process.env.FB_APP_SECRET,
+          redirect_uri: process.env.REDIRECT_URI,
+          code: code
+        })
+      }
+    );
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/oauth/google/token-exchange', async (req, res) => {
+  try {
+    const { code } = req.body;
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: process.env.REDIRECT_URI,
+        grant_type: 'authorization_code',
+      }),
+    });
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Lidar com erros não tratados
+process.on('unhandledRejection', (error) => console.error('Unhandled Rejection:', error));
+process.on('uncaughtException', (error) => console.error('Uncaught Exception:', error));
+
+// INICIA O SERVIDOR
+startServer();
