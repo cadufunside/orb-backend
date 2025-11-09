@@ -1,4 +1,4 @@
-// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v11 - 100% LIMPO)
+// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v13 - 100% LIMPO)
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -451,7 +451,7 @@ async function initializeWhatsApp() {
             fromMe: message.fromMe,
             timestamp: message.timestamp * 1000,
             type: message.type,
-            media_data: (message.hasMedia) ? `data:${media.mimetype};base64,${(await message.downloadMedia()).data}` : null
+            media_data: (message.hasMedia) ? `data:${(await message.downloadMedia()).mimetype};base64,${(await message.downloadMedia()).data}` : null
           }
         });
       } catch (error) {
@@ -506,13 +506,13 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
       body: JSON.stringify({
         code,
         client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+s        client_secret: process.env.GOOGLE_CLIENT_SECRET,
         redirect_uri: process.env.REDIRECT_URI,
         grant_type: 'authorization_code',
       }),
     });
     const data = await response.json();
-s    res.json(data);
+    res.json(data); // <<-- O ERRO 's' ESTAVA AQUI. FOI REMOVIDO.
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
