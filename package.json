@@ -18,7 +18,8 @@
     "whatsapp-web.js": "latest",
     "qrcode": "^1.5.3",
     "ws": "^8.14.2",
-    "puppeteer": "latest"
+    "puppeteer": "latest",
+    "pg": "latest"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
