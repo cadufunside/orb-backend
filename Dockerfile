@@ -1,30 +1,62 @@
-FROM node:18-alpine
+# ---------- STAGE 1: build ----------
+FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-# Chromium para puppeteer/whatsapp-web.js
-RUN apk add --no-cache chromium nss freetype
+# Dependências do chromium para whatsapp-web.js / puppeteer
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont
 
-# Puppeteer usando o Chromium do sistema
+# Ponte para o chromium do sistema (não baixar no build)
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-# Copia manifestos primeiro (cache de deps)
+# Instala dependências (inclui dev) para compilar Nest/TS
 COPY package.json ./
+# se tiver package-lock.json, usa ci; se não, usa install
+RUN if [ -f package-lock.json ]; then \
+      npm ci --legacy-peer-deps; \
+    else \
+      npm install --legacy-peer-deps; \
+    fi
 
-# ⚠️ NÃO defina NODE_ENV=production antes do build!
-# Instala TODAS as deps (inclui dev) para poder compilar com Nest/TypeScript
-RUN npm install --legacy-peer-deps
-
-# Copia o restante do projeto
+# Copia código e compila
 COPY . .
-
-# Compila (usa o @nestjs/cli instalado nas devDeps)
+# garante que o CLI existe via npx
 RUN npx nest build
 
-# Agora sim: modo produção e remove devDeps
-ENV NODE_ENV=production
+# Remove devDependencies para runtime
 RUN npm prune --omit=dev
 
-EXPOSE 3001
+# ---------- STAGE 2: runtime ----------
+FROM node:18-alpine AS runtime
+
+WORKDIR /app
+
+# Mesmo set de libs necessárias no runtime
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont
+
+ENV NODE_ENV=production
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+# Copia artefatos do build
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/dist ./dist
+
+# Cloud Run usa 8080; Railway injeta PORT automaticamente.
+EXPOSE 8080
+
 CMD ["node", "dist/main.js"]
