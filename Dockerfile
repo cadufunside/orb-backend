@@ -5,25 +5,25 @@ WORKDIR /app
 # Chromium para puppeteer/whatsapp-web.js
 RUN apk add --no-cache chromium nss freetype
 
+# Puppeteer usando o Chromium do sistema
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
-ENV NODE_ENV=production
-# Evita conflitos de peer deps em ambientes CI
-ENV NPM_CONFIG_LEGACY_PEER_DEPS=true
 
-# Copia manifestos primeiro p/ cache de dependências
+# Copia manifestos primeiro (cache de deps)
 COPY package.json ./
 
-# Instala TODAS deps (inclui dev) para conseguir rodar o build do Nest
-RUN npm install
+# ⚠️ NÃO defina NODE_ENV=production antes do build!
+# Instala TODAS as deps (inclui dev) para poder compilar com Nest/TypeScript
+RUN npm install --legacy-peer-deps
 
 # Copia o restante do projeto
 COPY . .
 
-# Compila
-RUN npm run build
+# Compila (usa o @nestjs/cli instalado nas devDeps)
+RUN npx nest build
 
-# Remove devDependencies para deixar a imagem leve
+# Agora sim: modo produção e remove devDeps
+ENV NODE_ENV=production
 RUN npm prune --omit=dev
 
 EXPOSE 3001
