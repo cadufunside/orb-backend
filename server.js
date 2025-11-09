@@ -51,6 +51,8 @@ async function setupDatabase() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    
+    // Criação da tabela de chats (Se não existir)
     await client.query(`
       CREATE TABLE IF NOT EXISTS chats (
         sessionId VARCHAR(255) NOT NULL,
@@ -62,6 +64,8 @@ async function setupDatabase() {
         PRIMARY KEY (sessionId, id)
       );
     `);
+    
+    // Criação da tabela de mensagens (Se não existir)
     await client.query(`
       CREATE TABLE IF NOT EXISTS messages (
         sessionId VARCHAR(255) NOT NULL,
@@ -75,11 +79,23 @@ async function setupDatabase() {
         ack INTEGER 
       );
     `);
+    
+    // 🚨 MIGRAÇÃO CRÍTICA: GARANTE QUE A COLUNA 'ack' EXISTE
+    await client.query(`
+      DO $$ 
+      BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='messages' AND column_name='ack') THEN
+              ALTER TABLE messages ADD COLUMN ack INTEGER DEFAULT 0;
+          END IF;
+      END
+      $$;
+    `);
+
     await client.query('COMMIT');
-    console.log('✅ Tabelas do banco de dados (Multi-Sessão) verificadas/criadas com sucesso!');
+    console.log('✅ Tabelas do banco de dados (Multi-Sessão) verificadas/criadas/migradas com sucesso!');
   } catch (e) {
     await client.query('ROLLBACK');
-    console.error('❌ Erro ao criar tabelas. Verifique as permissões do seu DB:', e);
+    console.error('❌ Erro ao criar ou migrar tabelas. Verifique as permissões do seu DB:', e);
     throw e;
   } finally {
     client.release();
@@ -149,7 +165,6 @@ async function saveMessageToDb(sessionId, client, message) {
   }
 }
 
-// *** MUDANÇA CRÍTICA: Função RÁPIDA (apenas lista de chats)
 async function syncChatList(sessionId, client, chats) {
   let dbClient;
   try {
@@ -192,13 +207,11 @@ async function syncChatList(sessionId, client, chats) {
   }
 }
 
-// *** MUDANÇA CRÍTICA: Função LENTA (histórico de mensagens) - Executada em background
 async function backgroundMessageSync(sessionId, client, chats) {
     console.log(`🔄 Iniciando sincronização de mensagens em background para ${sessionId}. Isso pode levar tempo.`);
     for (const chat of chats) {
         if (!client.info || !client.isRegistered) return; // Parar se o cliente desconectar
         try {
-            // Busca as últimas 50 mensagens por chat para histórico inicial
             const messages = await chat.fetchMessages({ limit: 50 });
             for (const m of messages) {
                 await saveMessageToDb(sessionId, client, m);
@@ -206,7 +219,6 @@ async function backgroundMessageSync(sessionId, client, chats) {
         } catch(e) {
             if (!e.message.includes('Session closed')) {
                 // Silencia a maioria dos erros para não poluir o log, mas registra falhas graves
-                // console.error(`❌ Falha ao buscar histórico de chat ${chat.id._serialized} para ${sessionId}: ${e.message}`);
             }
         }
     }
@@ -269,22 +281,18 @@ async function initializeWhatsApp(sessionId) {
         broadcastToClients(sessionId, { type: 'ready' });
 
         try {
-            // Atraso de estabilização
             await new Promise(resolve => setTimeout(resolve, 3000));
             
             const chats = await client.getChats();
             
-            // 1. AÇÃO RÁPIDA: Sincroniza apenas a lista de chats (Sem mensagens)
             await syncChatList(sessionId, client, chats); 
             
-            // 2. ENVIA OS CHATS PARA O FRONTEND IMEDIATAMENTE (Velocidade!)
             const dbResult = await pool.query(
                 'SELECT * FROM chats WHERE sessionId = $1 ORDER BY lastMessageTimestamp DESC LIMIT 100',
                 [sessionId]
             );
             broadcastToClients(sessionId, { type: 'chats', chats: dbResult.rows });
 
-            // 3. AÇÃO LENTA: Inicia a sincronização de histórico em background (NÃO BLOQUEIA O FRONTEND)
             backgroundMessageSync(sessionId, client, chats); 
 
         } catch (error) {
@@ -307,7 +315,6 @@ async function initializeWhatsApp(sessionId) {
     });
 
     client.on('message_create', async (message) => {
-        // ... (Lógica de message_create idêntica, apenas salva e envia) ...
         try {
             await saveMessageToDb(sessionId, client, message);
             const chatId = message.fromMe ? message.to : message.from;
@@ -348,7 +355,6 @@ async function initializeWhatsApp(sessionId) {
     });
     
     client.on('message_ack', async (message, ack) => {
-        // Atualiza o ack no DB e envia para o Frontend
         let dbClient;
         try {
             dbClient = await pool.connect();
@@ -449,7 +455,6 @@ async function startServer() {
                     case 'get_messages':
                         if (status === 'ready') {
                             const chatId = data.chatId;
-                            // *** MUDANÇA: Implementação de paginação para carregar histórico completo
                             const limit = data.limit || 50; 
                             const offset = data.offset || 0; 
                             
@@ -462,7 +467,7 @@ async function startServer() {
                                 ws.send(JSON.stringify({ 
                                     type: 'messages', 
                                     chatId, 
-                                    messages: dbResult.rows.reverse(), // Mensagens em ordem ascendente (mais antiga primeiro)
+                                    messages: dbResult.rows.reverse(),
                                     limit,
                                     offset 
                                 }));
@@ -536,8 +541,6 @@ app.get('/health', async (req, res) => {
     res.status(500).json({ status: 'error', database: 'disconnected', error: dbError.message });
   }
 });
-
-// ... (Rotas OAuth omitidas por brevidade, mas devem permanecer no seu arquivo) ...
 
 process.on('unhandledRejection', (error) => console.error(error));
 process.on('uncaughtException', (error) => console.error(error));
