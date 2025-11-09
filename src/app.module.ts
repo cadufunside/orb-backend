@@ -6,18 +6,17 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 
 import { WhatsAppModule } from './modules/whatsapp/whatsapp.module';
 import { WebSocketModule } from './modules/websocket/websocket.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
-    // carrega variáveis do ambiente
     ConfigModule.forRoot({ isGlobal: true }),
 
-    // *** USE APENAS DATABASE_URL ***
+    // Usa SOMENTE DATABASE_URL do Railway
     TypeOrmModule.forRootAsync({
       useFactory: () => {
         const url = process.env.DATABASE_URL;
         if (!url) {
-          // deixar explícito no log se a variável não chegou
           throw new Error('DATABASE_URL não definida no ambiente');
         }
         const useSSL =
@@ -26,15 +25,15 @@ import { WebSocketModule } from './modules/websocket/websocket.module';
 
         return {
           type: 'postgres',
-          url,                         // <- Railway: ${ Postgres.DATABASE_URL }
+          url,
           autoLoadEntities: true,
-          synchronize: process.env.NODE_ENV !== 'production', // ajuste como quiser
+          // em produção, normalmente desligado
+          synchronize: process.env.NODE_ENV !== 'production',
           ssl: useSSL ? { rejectUnauthorized: false } : false,
         } as any;
       },
     }),
 
-    // Redis/Bull (se não usar agora, pode remover)
     BullModule.forRoot({
       redis: {
         host: process.env.REDIS_HOST || 'localhost',
@@ -45,6 +44,7 @@ import { WebSocketModule } from './modules/websocket/websocket.module';
     EventEmitterModule.forRoot(),
     WhatsAppModule,
     WebSocketModule,
+    HealthModule,
   ],
 })
 export class AppModule {}
