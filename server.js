@@ -1,4 +1,4 @@
-// BACKEND COM PERSISTÊNCIA NO BANCO DE DADOS (PostgreSQL) E DISFARCES
+// BACKEND COM PERSISTÊNCIA E CRIAÇÃO AUTOMÁTICA DE TABELAS
 import express from 'express';
 import cors from 'cors';
 // Importação correta para whatsapp-web.js
@@ -185,5 +185,194 @@ async function startServer() {
               if (whatsappClient && clientStatus === 'ready') {
                 const chatId = data.chatId;
                 console.log(`Buscando mensagens do BD para ${chatId}`);
+                // Busca as mensagens em ordem correta (ASC)
                 const dbResult = await pool.query(
-                  'SELECT
+                  'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC LIMIT 100',
+                  [chatId]
+                );
+                
+                // Se não tiver no banco, busca no WhatsApp e salva (backfill)
+                if (dbResult.rows.length === 0) {
+                  console.log(`... Banco vazio. Buscando no WhatsApp (backfill) para ${chatId}`);
+                  const chat = await whatsappClient.getChatById(chatId);
+                  const messages = await chat.fetchMessages({ limit: 50 });
+                  for (const m of messages) {
+                    await saveMessageToDb(m);
+                  }
+                  // Busca de novo no banco após o backfill
+                  const newDbResult = await pool.query(
+                    'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC LIMIT 100',
+                    [chatId]
+                  );
+                  ws.send(JSON.stringify({ type: 'messages', chatId, messages: newDbResult.rows }));
+                } else {
+                  // Envia as mensagens do banco
+                  ws.send(JSON.stringify({ type: 'messages', chatId, messages: dbResult.rows }));
+                }
+              }
+              break;
+              
+            case 'send_message':
+              if (whatsappClient && clientStatus === 'ready') {
+                console.log(`Enviando mensagem para ${data.chatId}`);
+                const sentMessage = await whatsappClient.sendMessage(data.chatId, data.message);
+                await saveMessageToDb(sentMessage); // Salva a mensagem enviada no banco
+                console.log('Mensagem enviada e salva no banco');
+              }
+              break;
+              
+            case 'disconnect':
+              if (whatsappClient) {
+                console.log('Recebido comando de desconexão...');
+                await whatsappClient.destroy();
+                clientStatus = 'disconnected';
+                currentQR = null;
+                whatsappClient = null;
+                broadcastToClients({ type: 'disconnected', reason: 'User request' });
+              }
+              break;
+          }
+        } catch (error) {
+          console.error('❌ Erro ao processar mensagem WS:', error);
+          ws.send(JSON.stringify({ type: 'error', message: error.message }));
+        }
+      });
+      
+      ws.on('close', () => {
+        console.log('❌ Cliente WebSocket desconectado');
+        wsClients.delete(ws);
+      });
+    });
+  } catch (error) {
+    console.error('❌ Falha fatal ao iniciar o servidor (provavelmente banco de dados):', error);
+    process.exit(1); // Desliga se o banco de dados falhar
+  }
+}
+
+
+// ============================================
+// FUNÇÕES AUXILIARES DO BANCO DE DADOS
+// ============================================
+
+async function saveMessageToDb(message) {
+  let client;
+  try {
+    const chatId = message.fromMe ? message.to : message.from;
+    const timestamp = new Date(message.timestamp * 1000);
+
+    // Ignora mensagens de status (ex: "chamada de voz perdida")
+    if (message.type === 'call_log' || message.type === 'e2e_notification' || !message.body) {
+      return;
+    }
+
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    // 1. Garante que o chat existe. Se não, cria um.
+    const chat = await whatsappClient.getChatById(chatId);
+    await client.query(
+      `INSERT INTO chats (id, name, isGroup)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO NOTHING`,
+      [chatId, chat.name || chat.id.user || 'Sem nome', chat.isGroup]
+    );
+    
+    // 2. Salva a mensagem
+    await client.query(
+      `INSERT INTO messages (id, chatId, body, fromMe, timestamp, type)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO NOTHING`, // Ignora se a mensagem já existir
+      [message.id._serialized, chatId, message.body, message.fromMe, timestamp, message.type]
+    );
+
+    // 3. Atualiza o chat com a última mensagem
+    await client.query(
+      `UPDATE chats
+       SET lastMessageBody = $1, lastMessageTimestamp = $2
+       WHERE id = $3`,
+      [message.body, timestamp, chatId]
+    );
+    
+    await client.query('COMMIT');
+  } catch (error) {
+    if (client) await client.query('ROLLBACK');
+    console.error(`❌ Erro ao salvar mensagem no BD: ${error.message}`);
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function syncChatsWithDb(chats) {
+  let client;
+  try {
+    console.log(`Syncing ${chats.length} chats with DB...`);
+    client = await pool.connect();
+    await client.query('BEGIN'); 
+
+    for (const chat of chats) {
+      if (!chat.id || chat.id.user === 'status') continue; 
+
+      const lastMsg = chat.lastMessage;
+      const lastMsgTime = lastMsg ? new Date(lastMsg.timestamp * 1000) : null;
+
+      await client.query(
+        `INSERT INTO chats (id, name, isGroup, lastMessageBody, lastMessageTimestamp)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (id) DO UPDATE SET
+           name = EXCLUDED.name,
+           lastMessageBody = COALESCE(EXCLUDED.lastMessageBody, chats.lastMessageBody),
+           lastMessageTimestamp = COALESCE(EXCLUDED.lastMessageTimestamp, chats.lastMessageTimestamp)`,
+        [
+          chat.id._serialized,
+          chat.name || chat.id.user || 'Sem nome',
+          chat.isGroup,
+          lastMsg?.body || null,
+          lastMsgTime
+        ]
+      );
+    }
+    await client.query('COMMIT'); 
+    console.log('✅ Sincronização de chats com BD concluída.');
+  } catch (error) {
+    if (client) await client.query('ROLLBACK');
+    console.error(`❌ Erro ao sincronizar chats: ${error.message}`);
+  } finally {
+    if (client) client.release();
+  }
+}
+
+
+// ============================================
+// INICIALIZAR WHATSAPP (COM DISFARCES)
+// ============================================
+
+async function initializeWhatsApp() {
+  try {
+    if (whatsappClient || clientStatus === 'initializing') {
+      console.log('⚠️ Inicialização já em progresso.');
+      return;
+    }
+
+    console.log('🔄 Inicializando WhatsApp Web.js...');
+    clientStatus = 'initializing';
+    broadcastToClients({ type: 'status', status: clientStatus });
+    currentQR = null;
+    
+    whatsappClient = new Client({
+      authStrategy: new LocalAuth({
+        clientId: 'orb-crm-main-session' // ID Fixo para sessão estável
+      }),
+      puppeteer: {
+        headless: true,
+        // Disfarce de Navegador
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        // Argumentos "Invisíveis"
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--
