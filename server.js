@@ -1,4 +1,4 @@
-// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v8 - 100% LIMPO)
+// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v9 - 100% LIMPO)
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -487,7 +487,7 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
       body: JSON.stringify({
         code,
         client_id: process.env.GOOGLE_CLIENT_ID,
-g        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
         redirect_uri: process.env.REDIRECT_URI,
         grant_type: 'authorization_code',
       }),
