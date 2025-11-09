@@ -48,13 +48,11 @@ async function setupDatabase() {
   try {
     await client.query('BEGIN');
     
-    // MIGRATION 1: Adicionar a coluna sessionId se ela não existir
     await client.query(`
       ALTER TABLE IF EXISTS chats ADD COLUMN IF NOT EXISTS "sessionId" VARCHAR(255);
       ALTER TABLE IF EXISTS messages ADD COLUMN IF NOT EXISTS "sessionId" VARCHAR(255);
     `);
 
-    // MIGRATION 2: Criação/Verificação das tabelas (agora com a coluna sessionId)
     await client.query(`
       CREATE TABLE IF NOT EXISTS chats (
         sessionId VARCHAR(255) NOT NULL,
@@ -80,7 +78,6 @@ async function setupDatabase() {
       );
     `);
     
-    // MIGRATION 3: Cria a coluna media_data se não existir (para o código antigo)
     await client.query(`
       ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_data TEXT;
     `);
