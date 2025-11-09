@@ -1,4 +1,4 @@
-// BACKEND COM PERSISTÊNCIA DE MENSAGENS E MÍDIA (v10 - 100% LIMPO)
+// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v11 - 100% LIMPO)
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -19,14 +19,12 @@ const pool = new Pool({
 });
 
 // ============================================
-// FUNÇÃO: CRIAR/ATUALIZAR TABELAS AUTOMATICAMENTE
+// FUNÇÃO: CRIAR TABELAS AUTOMATICAMENTE
 // ============================================
 async function setupDatabase() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    
-    // SQL para criar a tabela de chats
     await client.query(`
       CREATE TABLE IF NOT EXISTS chats (
         id VARCHAR(255) PRIMARY KEY,
@@ -36,8 +34,6 @@ async function setupDatabase() {
         lastMessageTimestamp TIMESTAMPTZ
       );
     `);
-    
-    // SQL para criar a tabela de mensagens
     await client.query(`
       CREATE TABLE IF NOT EXISTS messages (
         id VARCHAR(255) PRIMARY KEY,
@@ -45,26 +41,17 @@ async function setupDatabase() {
         body TEXT,
         fromMe BOOLEAN,
         timestamp TIMESTAMPTZ,
-        type VARCHAR(100)
+        type VARCHAR(100),
+        media_data TEXT
       );
     `);
-    
-    // ================================================================
-    // NOVA ATUALIZAÇÃO: Adiciona a coluna para guardar imagens/mídia
-    // ================================================================
-    await client.query(`
-      ALTER TABLE messages ADD COLUMN IF NOT EXISTS media_data TEXT;
-    `);
-
-    // SQL para criar os índices (para velocidade)
     await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_chatId ON messages(chatId);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);`);
-    
     await client.query('COMMIT');
     console.log('✅ Tabelas do banco de dados verificadas/criadas com sucesso!');
   } catch (e) {
     await client.query('ROLLBACK');
-    console.error('❌ Erro ao criar/atualizar tabelas:', e);
+    console.error('❌ Erro ao criar tabelas:', e);
     throw e;
   } finally {
     client.release();
@@ -264,7 +251,7 @@ async function saveMessageToDb(message) {
     const timestamp = new Date(message.timestamp * 1000);
 
     if (message.type === 'call_log' || message.type === 'e2e_notification' || !message.id || !chatId) {
-      return; // Ignora mensagens de status
+      return;
     }
 
     client = await pool.connect();
@@ -279,16 +266,13 @@ async function saveMessageToDb(message) {
       [chatId, chat.name || chat.id.user || 'Sem nome', chat.isGroup]
     );
     
-    // ================================================================
-    // MUDANÇA PRINCIPAL: FAZER DOWNLOAD DA MÍDIA SE ELA EXISTIR
-    // ================================================================
+    // 2. Faz o download da mídia (imagem, etc.) se ela existir
     let mediaData = null;
     if (message.hasMedia) {
       console.log(`... Mensagem [${message.id._serialized}] tem mídia. Fazendo download...`);
       try {
         const media = await message.downloadMedia();
         if (media) {
-          // Guarda a imagem/vídeo como um texto longo (Base64)
           mediaData = `data:${media.mimetype};base64,${media.data}`;
           console.log(`... Download da mídia [${message.id._serialized}] concluído.`);
         }
@@ -296,9 +280,8 @@ async function saveMessageToDb(message) {
         console.error(`❌ Falha no download da mídia [${message.id._serialized}]: ${e.message}`);
       }
     }
-    // ================================================================
     
-    // 2. Salva a mensagem (agora com a coluna media_data)
+    // 3. Salva a mensagem (com a mídia)
     await client.query(
       `INSERT INTO messages (id, chatId, body, fromMe, timestamp, type, media_data)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -306,7 +289,7 @@ async function saveMessageToDb(message) {
       [message.id._serialized, chatId, message.body, message.fromMe, timestamp, message.type, mediaData]
     );
 
-    // 3. Atualiza o chat com a última mensagem
+    // 4. Atualiza o chat com a última mensagem
     const lastMessageBody = message.type === 'image' ? (message.body || '[Imagem]') : message.body;
     await client.query(
       `UPDATE chats
@@ -397,7 +380,7 @@ async function initializeWhatsApp() {
           '--no-zygote',
           '--disable-gpu',
           '--disable-blink-features=AutomationControlled',
-a       '--window-size=1920,1080',
+          '--window-size=1920,1080',
           '--lang=pt-BR,pt'
         ]
       }
@@ -451,7 +434,7 @@ a       '--window-size=1920,1080',
         console.log('Tentando reconectar automaticamente...');
         initializeWhatsApp();
       }, 10000);
-  S   });
+    });
     
     whatsappClient.on('message_create', async (message) => {
       try {
@@ -468,7 +451,7 @@ a       '--window-size=1920,1080',
             fromMe: message.fromMe,
             timestamp: message.timestamp * 1000,
             type: message.type,
-            media_data: (await message.hasMedia) ? `data:${message.mimetype};base64,${(await message.downloadMedia()).data}` : null
+            media_data: (message.hasMedia) ? `data:${media.mimetype};base64,${(await message.downloadMedia()).data}` : null
           }
         });
       } catch (error) {
@@ -529,7 +512,7 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
       }),
     });
     const data = await response.json();
-    res.json(data);
+s    res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
