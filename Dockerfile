@@ -1,18 +1,16 @@
-# ---------- STAGE 1: build ----------
+# ========= STAGE 1: build =========
 FROM node:18-alpine AS builder
-
 WORKDIR /app
 
-# Dependências para chromium / whatsapp-web.js
+# Dependências pro Chromium (whatsapp-web.js)
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
 
-# Evita baixar Chromium via npm
+# Evita baixar chromium no puppeteer
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 COPY package.json ./
-
-# Instala dependências (usa ci se existir lockfile)
+# instala tudo (inclui dev) para compilar
 RUN if [ -f package-lock.json ]; then \
       npm ci --legacy-peer-deps; \
     else \
@@ -21,21 +19,24 @@ RUN if [ -f package-lock.json ]; then \
 
 COPY . .
 RUN npx nest build
-RUN npm prune --omit=dev
 
-# ---------- STAGE 2: runtime ----------
-FROM node:18-alpine AS runtime
+# ========= STAGE 2: run =========
+FROM node:18-alpine AS runner
 WORKDIR /app
 
 RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefont
-
-ENV NODE_ENV=production
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV NODE_ENV=production
 
+# Copia node_modules do builder e remove devDeps
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/dist ./dist
+RUN npm prune --omit=dev
 
-EXPOSE 8080
+# Copia dist + package.json para runtime
+COPY --from=builder /app/dist ./dist
+COPY package.json .
+
+# Porta (Railway injeta PORT; usamos default 3001)
+EXPOSE 3001
 CMD ["node", "dist/main.js"]
