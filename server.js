@@ -6,6 +6,13 @@ import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
 
+// ============================================
+// MÓDULOS DE INVISIBILIDADE (Anti-Detecção)
+// ============================================
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+puppeteer.use(StealthPlugin());
+
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -47,7 +54,6 @@ async function setupDatabase() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
     await client.query(`
       CREATE TABLE IF NOT EXISTS chats (
         sessionId VARCHAR(255) NOT NULL,
@@ -68,11 +74,11 @@ async function setupDatabase() {
         fromMe BOOLEAN,
         timestamp TIMESTAMPTZ,
         type VARCHAR(100),
-        media_data TEXT,
-        FOREIGN KEY (sessionId, chatId) REFERENCES chats(sessionId, id) ON DELETE CASCADE
+        media_data TEXT
       );
     `);
-    
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_chatId ON messages(chatId);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);`);
     await client.query('COMMIT');
     console.log('✅ Tabelas do banco de dados (Multi-Sessão) verificadas/criadas com sucesso!');
   } catch (e) {
@@ -209,6 +215,7 @@ async function initializeWhatsApp(sessionId) {
             clientId: sessionId
         }),
         puppeteer: {
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH, // Usa o Chromium instalado pelo Dockerfile
             headless: true,
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
             args: [
@@ -217,7 +224,8 @@ async function initializeWhatsApp(sessionId) {
                 '--disable-gpu', '--disable-blink-features=AutomationControlled',
                 '--window-size=1920,1080', '--lang=pt-BR,pt'
             ]
-        }
+        },
+        puppeteer: puppeteer // Usa o módulo anti-deteção injetado
     });
 
     clientData.client = client;
@@ -258,6 +266,12 @@ async function initializeWhatsApp(sessionId) {
         clientData.status = 'disconnected';
         clientData.client = null;
         broadcastToClients(sessionId, { type: 'disconnected', reason });
+
+        // Tenta reconectar em caso de desconexão forçada (o que estava a falhar)
+        setTimeout(() => {
+            console.log('Tentando re-inicializar após desconexão...');
+            initializeWhatsApp(sessionId);
+        }, 5000); 
     });
 
     client.on('message_create', async (message) => {
@@ -300,6 +314,12 @@ async function initializeWhatsApp(sessionId) {
         clientData.status = 'error';
         clientData.client = null;
         broadcastToClients(sessionId, { type: 'error', message: error.message });
+
+        // Tenta reconectar imediatamente após falha de inicialização
+        setTimeout(() => {
+            console.log('Tentando re-inicializar após falha na inicialização...');
+            initializeWhatsApp(sessionId);
+        }, 5000); 
     }
 }
 
