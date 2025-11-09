@@ -13,11 +13,14 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
-  "express": "^4.18.2",
-  "cors": "^2.8.5",
-  "whatsapp-web.js": "latest",
-  "qrcode": "^1.5.3",
-  "ws": "^8.14.2",
-  "puppeteer": "latest" 
-}
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "whatsapp-web.js": "latest",
+    "qrcode": "^1.5.3",
+    "ws": "^8.14.2",
+    "puppeteer": "latest"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
 }
