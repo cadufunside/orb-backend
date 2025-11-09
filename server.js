@@ -1,4 +1,4 @@
-// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v7 - CORRIGIDO)
+// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v8 - 100% LIMPO)
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -169,20 +169,17 @@ async function startServer() {
                 console.log(`Buscando mensagens para ${chatId}...`);
                 
                 try {
-                  // PASSO 1: Sempre buscar as 200 últimas mensagens do WhatsApp para sincronizar
                   console.log(`... Sincronizando 200 últimas do WhatsApp para ${chatId}`);
                   const chat = await whatsappClient.getChatById(chatId);
                   const messages = await chat.fetchMessages({ limit: 200 });
 
-                  // PASSO 2: Salvar todas essas mensagens no banco (ON CONFLICT ignora duplicatas)
                   for (const m of messages) {
                     await saveMessageToDb(m);
                   }
                   console.log(`... Sincronização de ${messages.length} mensagens concluída.`);
 
-                  // PASSO 3: Agora, ler a lista COMPLETA do banco (ordenada)
                   const dbResult = await pool.query(
-                    'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC', // Sem limite, pega tudo
+                    'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC',
                     [chatId]
                   );
 
@@ -199,7 +196,7 @@ async function startServer() {
               if (whatsappClient && clientStatus === 'ready') {
                 console.log(`Enviando mensagem para ${data.chatId}`);
                 const sentMessage = await whatsappClient.sendMessage(data.chatId, data.message);
-                await saveMessageToDb(sentMessage); // Salva a mensagem enviada no banco
+                await saveMessageToDb(sentMessage);
                 console.log('Mensagem enviada e salva no banco');
               }
               break;
@@ -351,13 +348,11 @@ async function initializeWhatsApp() {
     
     whatsappClient = new Client({
       authStrategy: new LocalAuth({
-        clientId: 'orb-crm-main-session' // ID Fixo para sessão estável
+        clientId: 'orb-crm-main-session' 
       }),
       puppeteer: {
         headless: true,
-        // Disfarce de Navegador
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-        // Argumentos "Invisíveis"
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -397,7 +392,6 @@ async function initializeWhatsApp() {
       currentQR = null;
       broadcastToClients({ type: 'ready' });
 
-      // Sincroniza todos os chats com o banco de dados
       try {
         const chats = await whatsappClient.getChats();
         await syncChatsWithDb(chats);
@@ -418,7 +412,6 @@ async function initializeWhatsApp() {
       whatsappClient = null;
       broadcastToClients({ type: 'disconnected', reason });
 
-      // Tenta reconectar após 10 segundos
       setTimeout(() => {
         console.log('Tentando reconectar automaticamente...');
         initializeWhatsApp();
@@ -426,13 +419,11 @@ async function initializeWhatsApp() {
     });
     
     whatsappClient.on('message_create', async (message) => {
-      // Salva CADA mensagem (enviada ou recebida) no banco
       try {
         await saveMessageToDb(message);
         const chatId = message.fromMe ? message.to : message.from;
         console.log('📨 Nova mensagem salva no BD para ' + chatId);
 
-        // Envia a mensagem para o frontend
         broadcastToClients({
           type: 'message',
           chatId: chatId,
@@ -449,7 +440,6 @@ async function initializeWhatsApp() {
       }
     });
     
-    // Inicializar
     await whatsappClient.initialize();
     console.log('🔄 Cliente inicializado');
     
@@ -457,7 +447,7 @@ async function initializeWhatsApp() {
     console.error('❌ Erro ao inicializar WhatsApp:', error);
     clientStatus = 'error';
     currentQR = null;
-    whatsappClient = null; // Garante que podemos tentar de novo
+    whatsappClient = null; 
     broadcastToClients({ type: 'error', message: error.message });
   }
 }
@@ -479,7 +469,7 @@ app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
           redirect_uri: process.env.REDIRECT_URI,
           code: code
         })
-  Vá   } // <<-- 't' REMOVIDO DAQUI
+      }
     );
     const data = await response.json();
     res.json(data);
@@ -497,7 +487,7 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
       body: JSON.stringify({
         code,
         client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET, // <<-- 'S' CORRIGIDO AQUI
+g        client_secret: process.env.GOOGLE_CLIENT_SECRET,
         redirect_uri: process.env.REDIRECT_URI,
         grant_type: 'authorization_code',
       }),
