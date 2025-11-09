@@ -1,4 +1,3 @@
-// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v13 - 100% LIMPO)
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -7,9 +6,6 @@ import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
 
-// ============================================
-// CONFIGURAÇÃO DO BANCO DE DADOS
-// ============================================
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -18,9 +14,6 @@ const pool = new Pool({
   }
 });
 
-// ============================================
-// FUNÇÃO: CRIAR TABELAS AUTOMATICAMENTE
-// ============================================
 async function setupDatabase() {
   const client = await pool.connect();
   try {
@@ -65,17 +58,11 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
-// ============================================
-// VARIÁVEIS GLOBAIS
-// ============================================
 let whatsappClient = null;
 let currentQR = null;
 let clientStatus = 'disconnected';
 let sessionData = null;
 
-// ============================================
-// HEALTH CHECK
-// ============================================
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -90,9 +77,6 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// ============================================
-// ENDPOINTS REST (FALLBACK)
-// ============================================
 app.post('/api/whatsapp/qr', async (req, res) => {
   try {
     console.log('📱 Solicitação de QR Code via HTTP');
@@ -113,10 +97,6 @@ app.post('/api/whatsapp/qr', async (req, res) => {
 app.get('/api/whatsapp/status', (req, res) => {
   res.json({ status: clientStatus, session: sessionData });
 });
-
-// ============================================
-// WEBSOCKET (LIGADO AO BANCO DE DADOS)
-// ============================================
 
 let wss;
 let wsClients = new Set();
@@ -231,10 +211,6 @@ async function startServer() {
 }
 
 
-// ============================================
-// FUNÇÕES AUXILIARES DO BANCO DE DADOS
-// ============================================
-
 function broadcastToClients(data) {
   const message = JSON.stringify(data);
   wsClients.forEach(client => {
@@ -257,7 +233,6 @@ async function saveMessageToDb(message) {
     client = await pool.connect();
     await client.query('BEGIN');
 
-    // 1. Garante que o chat existe.
     const chat = await whatsappClient.getChatById(chatId);
     await client.query(
       `INSERT INTO chats (id, name, isGroup)
@@ -266,7 +241,6 @@ async function saveMessageToDb(message) {
       [chatId, chat.name || chat.id.user || 'Sem nome', chat.isGroup]
     );
     
-    // 2. Faz o download da mídia (imagem, etc.) se ela existir
     let mediaData = null;
     if (message.hasMedia) {
       console.log(`... Mensagem [${message.id._serialized}] tem mídia. Fazendo download...`);
@@ -281,7 +255,6 @@ async function saveMessageToDb(message) {
       }
     }
     
-    // 3. Salva a mensagem (com a mídia)
     await client.query(
       `INSERT INTO messages (id, chatId, body, fromMe, timestamp, type, media_data)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -289,7 +262,6 @@ async function saveMessageToDb(message) {
       [message.id._serialized, chatId, message.body, message.fromMe, timestamp, message.type, mediaData]
     );
 
-    // 4. Atualiza o chat com a última mensagem
     const lastMessageBody = message.type === 'image' ? (message.body || '[Imagem]') : message.body;
     await client.query(
       `UPDATE chats
@@ -347,10 +319,6 @@ async function syncChatsWithDb(chats) {
   }
 }
 
-
-// ============================================
-// INICIALIZAR WHATSAPP (COM DISFARCES)
-// ============================================
 
 async function initializeWhatsApp() {
   try {
@@ -506,13 +474,13 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
       body: JSON.stringify({
         code,
         client_id: process.env.GOOGLE_CLIENT_ID,
-s        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
         redirect_uri: process.env.REDIRECT_URI,
         grant_type: 'authorization_code',
       }),
     });
     const data = await response.json();
-    res.json(data); // <<-- O ERRO 's' ESTAVA AQUI. FOI REMOVIDO.
+    res.json(data); 
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
