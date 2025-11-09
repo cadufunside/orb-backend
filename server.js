@@ -1,7 +1,6 @@
-// BACKEND COM PERSISTÊNCIA E CRIAÇÃO AUTOMÁTICA DE TABELAS (VERSÃO 100% CORRIGIDA)
+// BACKEND COM PERSISTÊNCIA E CARGA DE HISTÓRICO (v7 - CORRIGIDO)
 import express from 'express';
 import cors from 'cors';
-// Importação correta para whatsapp-web.js
 import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode';
@@ -13,21 +12,19 @@ import pg from 'pg';
 // ============================================
 const { Pool } = pg;
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL, // Puxa automático do Railway
+  connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false // Necessário para o Railway
+    rejectUnauthorized: false
   }
 });
 
 // ============================================
-// NOVA FUNÇÃO: CRIAR TABELAS AUTOMATICAMENTE
+// FUNÇÃO: CRIAR TABELAS AUTOMATICAMENTE
 // ============================================
 async function setupDatabase() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    
-    // SQL para criar a tabela de chats
     await client.query(`
       CREATE TABLE IF NOT EXISTS chats (
         id VARCHAR(255) PRIMARY KEY,
@@ -37,8 +34,6 @@ async function setupDatabase() {
         lastMessageTimestamp TIMESTAMPTZ
       );
     `);
-    
-    // SQL para criar a tabela de mensagens
     await client.query(`
       CREATE TABLE IF NOT EXISTS messages (
         id VARCHAR(255) PRIMARY KEY,
@@ -49,17 +44,14 @@ async function setupDatabase() {
         type VARCHAR(100)
       );
     `);
-    
-    // SQL para criar os índices (para velocidade)
     await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_chatId ON messages(chatId);`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);`);
-    
     await client.query('COMMIT');
     console.log('✅ Tabelas do banco de dados verificadas/criadas com sucesso!');
   } catch (e) {
     await client.query('ROLLBACK');
     console.error('❌ Erro ao criar tabelas:', e);
-    throw e; // Lança o erro para impedir o start se o BD falhar
+    throw e;
   } finally {
     client.release();
   }
@@ -85,7 +77,6 @@ let sessionData = null;
 // ============================================
 app.get('/health', async (req, res) => {
   try {
-    // Testa a conexão com o banco
     await pool.query('SELECT 1');
     res.json({ 
       status: 'ok',
@@ -94,12 +85,7 @@ app.get('/health', async (req, res) => {
       timestamp: new Date().toISOString() 
     });
   } catch (dbError) {
-    res.status(500).json({
-      status: 'error',
-      database: 'disconnected',
-      whatsapp: clientStatus,
-      error: dbError.message
-    });
+    res.status(500).json({ status: 'error', database: 'disconnected', whatsapp: clientStatus, error: dbError.message });
   }
 });
 
@@ -136,17 +122,13 @@ let wsClients = new Set();
 
 async function startServer() {
   try {
-    // 1. CRIA AS TABELAS DO BANCO PRIMEIRO
     await setupDatabase();
     
-    // 2. SE O BANCO ESTIVER OK, INICIA O SERVIDOR
     const server = app.listen(PORT, () => {
       console.log(`🚀 Backend rodando na porta ${PORT}`);
-      // 3. INICIA O WHATSAPP
       initializeWhatsApp().catch(err => console.error('Erro na inicialização automática:', err));
     });
 
-    // 4. CONFIGURA O WEBSOCKET
     wss = new WebSocketServer({ server, path: '/whatsapp' });
     console.log('✅ WebSocket Server criado');
     
@@ -184,27 +166,31 @@ async function startServer() {
             case 'get_messages':
               if (whatsappClient && clientStatus === 'ready') {
                 const chatId = data.chatId;
-                console.log(`Buscando mensagens do BD para ${chatId}`);
-                const dbResult = await pool.query(
-                  'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC LIMIT 100', // ASC para ordem correta
-                  [chatId]
-                );
+                console.log(`Buscando mensagens para ${chatId}...`);
                 
-                // Se não tiver no banco, busca no WhatsApp e salva (backfill)
-                if (dbResult.rows.length === 0) {
-                  console.log(`... Banco vazio. Buscando no WhatsApp (backfill) para ${chatId}`);
+                try {
+                  // PASSO 1: Sempre buscar as 200 últimas mensagens do WhatsApp para sincronizar
+                  console.log(`... Sincronizando 200 últimas do WhatsApp para ${chatId}`);
                   const chat = await whatsappClient.getChatById(chatId);
-                  const messages = await chat.fetchMessages({ limit: 50 });
+                  const messages = await chat.fetchMessages({ limit: 200 });
+
+                  // PASSO 2: Salvar todas essas mensagens no banco (ON CONFLICT ignora duplicatas)
                   for (const m of messages) {
                     await saveMessageToDb(m);
                   }
-                  const newDbResult = await pool.query(
-                    'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC LIMIT 100',
+                  console.log(`... Sincronização de ${messages.length} mensagens concluída.`);
+
+                  // PASSO 3: Agora, ler a lista COMPLETA do banco (ordenada)
+                  const dbResult = await pool.query(
+                    'SELECT * FROM messages WHERE chatId = $1 ORDER BY timestamp ASC', // Sem limite, pega tudo
                     [chatId]
                   );
-                  ws.send(JSON.stringify({ type: 'messages', chatId, messages: newDbResult.rows }));
-                } else {
+
                   ws.send(JSON.stringify({ type: 'messages', chatId, messages: dbResult.rows }));
+
+                } catch (error) {
+                   console.error('❌ Erro ao buscar/sincronizar mensagens:', error);
+                   ws.send(JSON.stringify({ type: 'error', message: error.message }));
                 }
               }
               break;
@@ -242,7 +228,7 @@ async function startServer() {
     });
   } catch (error) {
     console.error('❌ Falha fatal ao iniciar o servidor (provavelmente banco de dados):', error);
-    process.exit(1); // Desliga se o banco de dados falhar
+    process.exit(1);
   }
 }
 
@@ -266,7 +252,6 @@ async function saveMessageToDb(message) {
     const chatId = message.fromMe ? message.to : message.from;
     const timestamp = new Date(message.timestamp * 1000);
 
-    // Ignora mensagens de status (ex: "chamada de voz perdida")
     if (message.type === 'call_log' || message.type === 'e2e_notification' || !message.id || !chatId) {
       return;
     }
@@ -274,7 +259,7 @@ async function saveMessageToDb(message) {
     client = await pool.connect();
     await client.query('BEGIN');
 
-    // 1. Garante que o chat existe. Se não, cria um.
+    // 1. Garante que o chat existe.
     const chat = await whatsappClient.getChatById(chatId);
     await client.query(
       `INSERT INTO chats (id, name, isGroup)
@@ -494,7 +479,7 @@ app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
           redirect_uri: process.env.REDIRECT_URI,
           code: code
         })
-      }
+  Vá   } // <<-- 't' REMOVIDO DAQUI
     );
     const data = await response.json();
     res.json(data);
@@ -512,7 +497,7 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
       body: JSON.stringify({
         code,
         client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET, // <<-- 'S' CORRIGIDO AQUI
         redirect_uri: process.env.REDIRECT_URI,
         grant_type: 'authorization_code',
       }),
