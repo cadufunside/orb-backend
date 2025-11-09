@@ -6,6 +6,12 @@ import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
 
+// ⚔️ PILAR DA INVISIBILIDADE: MÓDULOS ANTI-DETECÇÃO (INSPETOR FANTASMA)
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+// Aplica o plugin de furtividade ao Puppeteer
+puppeteer.use(StealthPlugin());
+
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -70,8 +76,6 @@ async function setupDatabase() {
         media_data TEXT
       );
     `);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_chatId ON messages(chatId);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);`);
     await client.query('COMMIT');
     console.log('✅ Tabelas do banco de dados (Multi-Sessão) verificadas/criadas com sucesso!');
   } catch (e) {
@@ -210,15 +214,22 @@ async function initializeWhatsApp(sessionId) {
         authStrategy: new LocalAuth({
             clientId: sessionId
         }),
+        // 🛡️ CONFIGURAÇÃO DE DEFESA MÁXIMA DO CHROME (USANDO PUPPETEER-EXTRA)
         puppeteer: {
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
             headless: true,
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
             args: [
-                '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
-                '--disable-gpu', '--disable-blink-features=AutomationControlled',
-                '--window-size=1920,1080', '--lang=pt-BR,pt'
+                '--no-sandbox', 
+                '--disable-setuid-sandbox', 
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas', 
+                '--no-first-run', 
+                '--no-zygote', 
+                '--disable-gpu', 
+                '--disable-blink-features=AutomationControlled', 
+                '--window-size=1920,1080', 
+                '--lang=pt-BR,pt'
             ]
         }
     });
@@ -310,7 +321,8 @@ async function initializeWhatsApp(sessionId) {
         await client.initialize();
         console.log(`🔄 Cliente ${sessionId} inicializado`);
     } catch (error) {
-        console.error(`❌ Erro ao inicializar WhatsApp para ${sessionId}:`, error);
+        // Esta é a área mais importante para evitar o "Stopping Container"
+        console.error(`❌ Erro ao inicializar WhatsApp para ${sessionId}:`, error.message);
         clientData.status = 'error';
         clientData.client = null;
         broadcastToClients(sessionId, { type: 'error', message: error.message });
@@ -429,6 +441,7 @@ async function startServer() {
         });
     });
   } catch (error) {
+    console.error('❌ Falha fatal ao iniciar o servidor:', error);
     process.exit(1);
   }
 }
@@ -490,7 +503,12 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
   }
 });
 
-process.on('unhandledRejection', (error) => console.error(error));
-process.on('uncaughtException', (error) => console.error(error));
+// Tratamento de erros global para evitar o "Stopping Container"
+process.on('unhandledRejection', (error) => {
+    console.error('❌ Rejeição Não Tratada (Pode causar crash):', error);
+});
+process.on('uncaughtException', (error) => {
+    console.error('❌ Exceção Não Capturada (Pode causar crash):', error);
+});
 
 startServer();
