@@ -1,7 +1,8 @@
 // backend/server.js
 import express from 'express';
 import cors from 'cors';
-import { Client, LocalAuth } from 'whatsapp-web.js';
+import pkg from 'whatsapp-web.js';
+const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 
