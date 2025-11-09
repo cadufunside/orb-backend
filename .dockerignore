@@ -1,9 +1,12 @@
 node_modules
 npm-debug.log
-Dockerfile*
-docker-compose*
 .git
 .gitignore
-dist
+README.md
 .env
-.env.*
+.DS_Store
+*.md
+.vscode
+.idea
+.wwebjs_auth
+.wwebjs_cache
