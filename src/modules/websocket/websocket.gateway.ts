@@ -1,5 +1,6 @@
+// src/modules/websocket/websocket.gateway.ts
 import {
-  WebSocketGateway,
+  WebSocketGateway as WsGateway,
   WebSocketServer,
   OnGatewayConnection,
   OnGatewayDisconnect,
@@ -8,11 +9,12 @@ import { Server, Socket } from 'socket.io';
 import { Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
-@WebSocketGateway({ cors: { origin: '*' } })
-export class WebSocketGateway 
-  implements OnGatewayConnection, OnGatewayDisconnect {
+@WsGateway({ cors: { origin: '*' } })
+export class RealtimeGateway
+  implements OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer() server: Server;
-  private readonly logger = new Logger(WebSocketGateway.name);
+  private readonly logger = new Logger(RealtimeGateway.name);
 
   handleConnection(client: Socket) {
     this.logger.log(`🔌 Cliente conectado: ${client.id}`);
