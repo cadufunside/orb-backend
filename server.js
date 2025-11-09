@@ -9,25 +9,18 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors({
-  origin: '*', // Em produção, especifique os domínios
+  origin: '*',
   credentials: true
 }));
 
 app.use(express.json());
-
-// ============================================
-// VARIÁVEIS GLOBAIS
-// ============================================
 
 let whatsappClient = null;
 let currentQR = null;
 let clientStatus = 'disconnected';
 let sessionData = null;
 
-// ============================================
-// HEALTH CHECK
-// ============================================
-
+// Health Check
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
@@ -35,10 +28,6 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString() 
   });
 });
-
-// ============================================
-// ENDPOINTS REST (FALLBACK SEM WEBSOCKET)
-// ============================================
 
 // Gerar QR Code via HTTP
 app.post('/api/whatsapp/qr', async (req, res) => {
@@ -76,10 +65,6 @@ app.get('/api/whatsapp/status', (req, res) => {
     hasClient: !!whatsappClient
   });
 });
-
-// ============================================
-// WEBSOCKET (OPCIONAL - MELHOR PERFORMANCE)
-// ============================================
 
 const server = app.listen(PORT, () => {
   console.log(`🚀 Backend rodando na porta ${PORT}`);
@@ -152,10 +137,6 @@ try {
   console.log('📡 Usando apenas HTTP endpoints');
 }
 
-// ============================================
-// BROADCAST PARA TODOS OS CLIENTES WS
-// ============================================
-
 function broadcastToClients(data) {
   const message = JSON.stringify(data);
   wsClients.forEach(client => {
@@ -164,10 +145,6 @@ function broadcastToClients(data) {
     }
   });
 }
-
-// ============================================
-// INICIALIZAR WHATSAPP
-// ============================================
 
 async function initializeWhatsApp() {
   try {
@@ -199,7 +176,6 @@ async function initializeWhatsApp() {
       }
     });
     
-    // Evento: QR Code gerado
     whatsappClient.on('qr', async (qr) => {
       console.log('📱 QR Code gerado!');
       clientStatus = 'qr_ready';
@@ -207,64 +183,42 @@ async function initializeWhatsApp() {
       try {
         currentQR = await qrcode.toDataURL(qr);
         console.log('✅ QR convertido para base64');
-        
         broadcastToClients({ type: 'qr', qr: currentQR });
       } catch (error) {
         console.error('❌ Erro ao converter QR:', error);
       }
     });
     
-    // Evento: Autenticado
     whatsappClient.on('authenticated', () => {
       console.log('✅ WhatsApp autenticado!');
       clientStatus = 'authenticated';
       sessionData = { authenticated: true, timestamp: Date.now() };
-      
-      broadcastToClients({ 
-        type: 'authenticated', 
-        session: sessionData 
-      });
+      broadcastToClients({ type: 'authenticated', session: sessionData });
     });
     
-    // Evento: Pronto
     whatsappClient.on('ready', () => {
       console.log('✅ WhatsApp pronto!');
       clientStatus = 'ready';
-      
       broadcastToClients({ type: 'ready' });
     });
     
-    // Evento: Loading
     whatsappClient.on('loading_screen', (percent, message) => {
       console.log(`⏳ Carregando: ${percent}%`);
-      
-      broadcastToClients({ 
-        type: 'loading_screen', 
-        percent, 
-        message 
-      });
+      broadcastToClients({ type: 'loading_screen', percent, message });
     });
     
-    // Evento: Desconectado
     whatsappClient.on('disconnected', (reason) => {
       console.log(`❌ WhatsApp desconectado: ${reason}`);
       clientStatus = 'disconnected';
       currentQR = null;
       whatsappClient = null;
-      
-      broadcastToClients({ 
-        type: 'disconnected', 
-        reason 
-      });
+      broadcastToClients({ type: 'disconnected', reason });
     });
     
-    // Evento: Mensagem recebida
     whatsappClient.on('message', async (message) => {
       console.log('📨 Nova mensagem:', message.from);
-      // Processar mensagem aqui
     });
     
-    // Inicializar
     await whatsappClient.initialize();
     console.log('🔄 Cliente inicializado');
     
@@ -272,17 +226,9 @@ async function initializeWhatsApp() {
     console.error('❌ Erro ao inicializar WhatsApp:', error);
     clientStatus = 'error';
     currentQR = null;
-    
-    broadcastToClients({ 
-      type: 'error', 
-      message: error.message 
-    });
+    broadcastToClients({ type: 'error', message: error.message });
   }
 }
-
-// ============================================
-// OAUTH TOKEN EXCHANGE (OUTROS SERVIÇOS)
-// ============================================
 
 app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
   try {
