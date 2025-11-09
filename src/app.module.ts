@@ -35,11 +35,12 @@ import { HealthModule } from './health/health.module';
     }),
 
     BullModule.forRoot({
-      redis: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT || '6379', 10),
-      },
-    }),
+  redis: {
+    host: process.env.REDIS_HOST, // Remova '|| localhost'
+    port: parseInt(process.env.REDIS_PORT, 10), // Remova '|| 6379'
+    password: process.env.REDIS_PASSWORD, // <-- ADICIONE ESTA LINHA
+  },
+}),
 
     EventEmitterModule.forRoot(),
     WhatsAppModule,
