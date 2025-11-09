@@ -1,8 +1,9 @@
+// src/modules/websocket/websocket.module.ts
 import { Module } from '@nestjs/common';
-import { WebSocketGateway } from './websocket.gateway';
+import { RealtimeGateway } from './websocket.gateway';
 
 @Module({
-  providers: [WebSocketGateway],
-  exports: [WebSocketGateway],
+  providers: [RealtimeGateway],
+  exports: [RealtimeGateway],
 })
-export class WebSocketModule {}
+export class WebsocketModule {}
