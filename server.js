@@ -5,9 +5,6 @@ const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-puppeteer.use(StealthPlugin());
 
 const { Pool } = pg;
 const pool = new Pool({
@@ -73,6 +70,8 @@ async function setupDatabase() {
         media_data TEXT
       );
     `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_chatId ON messages(chatId);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);`);
     await client.query('COMMIT');
     console.log('✅ Tabelas do banco de dados (Multi-Sessão) verificadas/criadas com sucesso!');
   } catch (e) {
@@ -249,17 +248,12 @@ async function initializeWhatsApp(sessionId) {
         clientData.qrCode = null;
         broadcastToClients(sessionId, { type: 'ready' });
 
-        // Tenta pré-carregar os chats.
         try {
-            // *** Atraso CRÍTICO adicionado para evitar "Invariant Violation" ***
-            console.log('Aguardando 3 segundos para estabilizar o cliente antes de sincronizar...');
             await new Promise(resolve => setTimeout(resolve, 3000));
             
             const chats = await client.getChats();
-            // A sincronização completa de chats e histórico ocorre aqui
             await syncChatsWithDb(sessionId, client, chats); 
         } catch (error) {
-            // Este log é esperado se a Invariant Violation ainda ocorrer.
             if (!error.message.includes('Invariant Violation')) {
                 console.error(`❌ Erro ao pré-carregar chats para ${sessionId}:`, error.message);
             }
@@ -367,8 +361,6 @@ async function startServer() {
                 const client = clientData.client;
                 const status = clientData.status;
 
-                console.log(`📨 Mensagem WS recebida para ${sessionId}: ${data.type}`);
-                
                 switch (data.type) {
                     case 'request_qr':
                         if (!client || status === 'disconnected') await initializeWhatsApp(sessionId);
@@ -377,7 +369,6 @@ async function startServer() {
                         
                     case 'get_chats':
                         if (status === 'ready') {
-                            console.log(`Buscando chats do banco de dados para ${sessionId}...`);
                             const dbResult = await pool.query(
                                 'SELECT * FROM chats WHERE sessionId = $1 ORDER BY lastMessageTimestamp DESC LIMIT 100',
                                 [sessionId]
@@ -389,17 +380,14 @@ async function startServer() {
                     case 'get_messages':
                         if (status === 'ready') {
                             const chatId = data.chatId;
-                            console.log(`Buscando mensagens para ${chatId} de ${sessionId}...`);
                             
                             try {
-                                console.log(`... Sincronizando 200 últimas do WhatsApp para ${chatId}/${sessionId}`);
                                 const chat = await client.getChatById(chatId);
                                 const messages = await chat.fetchMessages({ limit: 200 });
 
                                 for (const m of messages) {
                                     await saveMessageToDb(sessionId, client, m);
                                 }
-                                console.log(`... Sincronização concluída. Puxando histórico do DB.`);
 
                                 const dbResult = await pool.query(
                                     'SELECT * FROM messages WHERE sessionId = $1 AND chatId = $2 ORDER BY timestamp ASC',
@@ -409,7 +397,6 @@ async function startServer() {
                                 ws.send(JSON.stringify({ type: 'messages', chatId, messages: dbResult.rows }));
 
                             } catch (error) {
-                                console.error(`❌ Erro ao buscar/sincronizar mensagens para ${sessionId}:`, error);
                                 ws.send(JSON.stringify({ type: 'error', message: error.message }));
                             }
                         }
@@ -417,16 +404,13 @@ async function startServer() {
                         
                     case 'send_message':
                         if (status === 'ready' && client) {
-                            console.log(`Enviando mensagem para ${data.chatId} de ${sessionId}`);
                             const sentMessage = await client.sendMessage(data.chatId, data.message);
                             await saveMessageToDb(sessionId, client, sentMessage);
-                            console.log('Mensagem enviada e salva no banco');
                         }
                         break;
                         
                     case 'disconnect':
                         if (client) {
-                            console.log(`Recebido comando de desconexão para ${sessionId}...`);
                             await client.destroy();
                             clientData.status = 'disconnected';
                             clientData.qrCode = null;
@@ -436,18 +420,15 @@ async function startServer() {
                         break;
                 }
             } catch (error) {
-                console.error(`❌ Erro ao processar mensagem WS para ${sessionId}:`, error);
                 ws.send(JSON.stringify({ type: 'error', message: error.message }));
             }
         });
         
         ws.on('close', () => {
-            console.log(`❌ Cliente WebSocket desconectado para ${sessionId}`);
             clientData.wsClients.delete(ws);
         });
     });
   } catch (error) {
-    console.error('❌ Falha fatal ao iniciar o servidor:', error);
     process.exit(1);
   }
 }
@@ -509,7 +490,7 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
   }
 });
 
-process.on('unhandledRejection', (error) => console.error('Unhandled Rejection:', error));
-process.on('uncaughtException', (error) => console.error('Uncaught Exception:', error));
+process.on('unhandledRejection', (error) => console.error(error));
+process.on('uncaughtException', (error) => console.error(error));
 
 startServer();
