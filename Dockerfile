@@ -5,7 +5,7 @@ ENV NODE_ENV=production
 
 WORKDIR /app
 
-# 1. Instala dependências do sistema Linux necessárias para o Puppeteer (Chromium)
+# 1. Instala TODAS as dependências do sistema
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -13,26 +13,25 @@ RUN apk add --no-cache \
     harfbuzz \
     ca-certificates \
     ttf-freefont \
-    tini
+    tini \
+    # **CORREÇÃO CRÍTICA**: Adiciona o cliente PostgreSQL para compilar a dependência 'pg'
+    postgresql-client 
 
-# 2. Configura as variáveis do Puppeteer para usar o Chromium instalado
+# 2. Configura as variáveis do Puppeteer
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 # 3. Copia o package.json e instala as dependências
 COPY package.json package-lock.json* ./
 
-# 4. Instala as dependências de forma robusta
-# Usando 'npm install' em vez de 'npm ci' para maior compatibilidade.
+# 4. **CORREÇÃO DE INSTALAÇÃO**: Usa um comando mais simples para evitar travamentos
 RUN npm install --omit=dev
 
 # 5. Copia o código-fonte
 COPY . .
 
-# 6. Define a porta de exposição (Node.js)
+# 6. Comando de Início
 EXPOSE 3000
-
-# 7. Comando de Início (usando tini para gerenciar o processo Node)
 USER node
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "server.js"]
