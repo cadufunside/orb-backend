@@ -1,6 +1,10 @@
+# ------------------------------------------------------------
+# Backend WhatsApp QR – build rápido e estável com PNPM (apk)
+# ------------------------------------------------------------
 FROM node:20-alpine
 
 ENV NODE_ENV=production \
+    # (essas variáveis ajudam também em libs que consultam configs do npm)
     NPM_CONFIG_AUDIT=false \
     NPM_CONFIG_FUND=false \
     NPM_CONFIG_PROGRESS=false \
@@ -11,15 +15,15 @@ ENV NODE_ENV=production \
     NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=180000
 
 WORKDIR /app
-RUN apk add --no-cache tini
 
-# 1) Habilita PNPM via Corepack
-RUN corepack enable
+# 0) Tini + PNPM direto do Alpine (evita corepack baixar tarball da npm)
+RUN apk add --no-cache tini pnpm
 
-# 2) Copia só o manifesto (melhor cache)
+# 1) Copia apenas o manifesto para permitir cache de dependências
 COPY package.json ./
 
-# 3) Cria .npmrc dentro da imagem (mirror + timeouts)
+# 2) Cria .npmrc dentro da imagem (mirror rápido + timeouts)
+#    -> Se o npmmirror não for bom para você, troque para https://registry.npmjs.org
 RUN /bin/sh -lc 'cat > .npmrc << "EOF"\n\
 registry=https://registry.npmmirror.com\n\
 fetch-retries=7\n\
@@ -30,18 +34,21 @@ fetch-timeout=600000\n\
 prefer-online=true\n\
 EOF'
 
-# 4) Gera lockfile do pnpm (sem instalar nada ainda)
-#    (resolve versões e grava pnpm-lock.yaml)
+# 3) Gera o lockfile do pnpm (resolve versões, sem instalar ainda)
 RUN pnpm install --lockfile-only --reporter=silent
 
-# 5) Instala somente prod com lockfile (rápido e determinístico)
-RUN pnpm install --frozen-lockfile --prod --reporter=silent --network-concurrency=8 --fetch-timeout=600000
+# 4) Prefetch das deps de produção (baixa para o store/cache do pnpm)
+#    -> Deixa a próxima instalação "offline" e bem mais rápida
+RUN pnpm fetch --prod --reporter=silent --fetch-timeout=600000
 
-# 6) Copia o resto do código
+# 5) Copia o restante do código
 COPY tsconfig.json ./
 COPY src ./src
 
-# 7) Build TS
+# 6) Instala somente produção usando o que já foi baixado (offline)
+RUN pnpm install --prod --offline --frozen-lockfile --reporter=silent
+
+# 7) Compila TypeScript
 RUN pnpm build
 
 # 8) Runtime
