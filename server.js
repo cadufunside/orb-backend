@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg; // CORREÇÃO DE SINTAXE: APENAS ESTA LINHA IMPORTA Client e LocalAuth
+const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
@@ -217,7 +217,9 @@ async function initializeWhatsApp(sessionId) {
 
     const client = new Client({
         authStrategy: new LocalAuth({
-            clientId: sessionId
+            clientId: sessionId,
+            // 🛑 CORREÇÃO FINAL E CRÍTICA: Mudar o caminho de sessão para um diretório gravável
+            dataPath: '/tmp/wwebjs-sessions' 
         }),
         puppeteer: {
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
