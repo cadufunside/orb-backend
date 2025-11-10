@@ -12,8 +12,14 @@ COPY package.json ./
 RUN printf "audit=false\nfund=false\nprogress=false\nprefer-online=true\nfetch-retries=5\nfetch-retry-factor=2\nfetch-retry-mintimeout=20000\nfetch-retry-maxtimeout=120000\n" > .npmrc
 
 # gera lockfile e instala de forma determinística
-RUN npm i --package-lock-only --omit=dev && npm ci --omit=dev
-
+RUN npm config set registry https://registry.npmmirror.com \
+ && npm config set fetch-retries 7 \
+ && npm config set fetch-retry-factor 2 \
+ && npm config set fetch-retry-mintimeout 30000 \
+ && npm config set fetch-retry-maxtimeout 180000 \
+ && npm config set fetch-timeout 600000 \
+ && npm i --package-lock-only --omit=dev --loglevel=warn \
+ && npm ci --omit=dev --ignore-scripts --foreground-scripts=false --loglevel=warn
 # copia o código
 COPY tsconfig.json ./
 COPY src ./src
