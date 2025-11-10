@@ -12,7 +12,7 @@ RUN apk add --no-cache tini
 
 COPY package.json ./
 
-RUN /bin/sh -lc 'cat > .npmrc << "EOF"\naudit=false\nfund=false\nprogress=false\nprefer-online=true\nfetch-retries=9\nfetch-retry-factor=2\nfetch-retry-mintimeout=45000\nfetch-retry-maxtimeout=240000\nfetch-timeout=900000\nregistry=https://registry.npmjs.org\nEOF'
+RUN /bin/sh -lc 'cat > .npmrc << "EOF"\naudit=false\nfund=false\nprogress=false\nprefer-online=true\nfetch-retries=9\nfetch-retry-factor=2\nfetch-retry-mintimeout=45000\nfetch-retry-maxtimeout=240000\nfetch-timeout=900000\nregistry=https://registry.npmmirror.com\nEOF'
 
 RUN npm config set cache /tmp/.npm-cache --global
 
