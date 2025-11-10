@@ -1,52 +1,38 @@
-FROM node:20-alpine
+FROM node:18-alpine
 
-ENV NODE_ENV=production \
-    NPM_CONFIG_AUDIT=false \
-    NPM_CONFIG_FUND=false \
-    NPM_CONFIG_PROGRESS=false \
-    NPM_CONFIG_PREFER_ONLINE=true \
-    NPM_CONFIG_FETCH_RETRIES=9 \
-    NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
-    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=45000 \
-    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=240000
+# Define o ambiente como produção
+ENV NODE_ENV=production
 
 WORKDIR /app
-RUN apk add --no-cache tini
 
-# manifesto
-COPY package.json ./
+# 1. Instala dependências do sistema Linux necessárias para o Puppeteer (Chromium)
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    tini
 
-# .npmrc dentro da imagem (mirror + timeouts)
-RUN /bin/sh -lc 'cat > .npmrc << "EOF"\n\
-audit=false\n\
-fund=false\n\
-progress=false\n\
-prefer-online=true\n\
-fetch-retries=9\n\
-fetch-retry-factor=2\n\
-fetch-retry-mintimeout=45000\n\
-fetch-retry-maxtimeout=240000\n\
-fetch-timeout=900000\n\
-registry=https://registry.npmmirror.com\n\
-EOF'
+# 2. Configura as variáveis do Puppeteer para usar o Chromium instalado
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-# cache local do npm
-RUN npm config set cache /tmp/.npm-cache --global
+# 3. Copia o package.json e instala as dependências
+COPY package.json package-lock.json* ./
 
-# lockfile + install tolerante (sem postinstall)
-RUN npm i --package-lock-only --loglevel=warn \
- && npm ci --omit=dev --ignore-scripts --foreground-scripts=false --loglevel=warn
+# 4. Instala as dependências de forma robusta
+# Usando 'npm install' em vez de 'npm ci' para maior compatibilidade.
+RUN npm install --omit=dev
 
-# código
-COPY tsconfig.json ./
-COPY src ./src
+# 5. Copia o código-fonte
+COPY . .
 
-# build TS
-RUN npm run build
+# 6. Define a porta de exposição (Node.js)
+EXPOSE 3000
 
-ENV SESSION_DIR=/data/sessions
-RUN mkdir -p ${SESSION_DIR}
-
+# 7. Comando de Início (usando tini para gerenciar o processo Node)
 USER node
-ENTRYPOINT ["/sbin/tini","--"]
-CMD ["node","dist/index.js"]
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "server.js"]
