@@ -4,8 +4,8 @@ import cors from 'cors';
 import { Client, LocalAuth } from 'whatsapp-web.js';
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
-import pkg from 'pg';
-const { Pool } = pkg;
+import pkg from 'whatsapp-web.js';
+const { Client, LocalAuth } = pkg;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
