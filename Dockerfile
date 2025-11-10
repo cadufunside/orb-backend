@@ -13,38 +13,38 @@ ENV NODE_ENV=production \
 WORKDIR /app
 RUN apk add --no-cache tini
 
-# 1) Copia só o manifesto p/ cache de deps
+# 1) Habilita PNPM via Corepack
+RUN corepack enable
+
+# 2) Copia só o manifesto (melhor cache)
 COPY package.json ./
 
-# 2) Cria .npmrc dentro da imagem (mirror e timeouts)
+# 3) Cria .npmrc dentro da imagem (mirror + timeouts)
 RUN /bin/sh -lc 'cat > .npmrc << "EOF"\n\
-audit=false\n\
-fund=false\n\
-progress=false\n\
-prefer-online=true\n\
+registry=https://registry.npmmirror.com\n\
 fetch-retries=7\n\
 fetch-retry-factor=2\n\
 fetch-retry-mintimeout=30000\n\
 fetch-retry-maxtimeout=180000\n\
 fetch-timeout=600000\n\
-registry=https://registry.npmmirror.com\n\
+prefer-online=true\n\
 EOF'
 
-# 3) Cache local do npm (evita re-download total em builds seguidos)
-RUN npm config set cache /tmp/.npm-cache --global
+# 4) Gera lockfile do pnpm (sem instalar nada ainda)
+#    (resolve versões e grava pnpm-lock.yaml)
+RUN pnpm install --lockfile-only --reporter=silent
 
-# 4) Gera lockfile e instala de forma determinística (tolerante)
-RUN npm i --package-lock-only --omit=dev --loglevel=warn \
- && npm ci --omit=dev --ignore-scripts --foreground-scripts=false --loglevel=warn
+# 5) Instala somente prod com lockfile (rápido e determinístico)
+RUN pnpm install --frozen-lockfile --prod --reporter=silent --network-concurrency=8 --fetch-timeout=600000
 
-# 5) Copia o resto do código
+# 6) Copia o resto do código
 COPY tsconfig.json ./
 COPY src ./src
 
-# 6) Build TS
-RUN npm run build
+# 7) Build TS
+RUN pnpm build
 
-# 7) Prepara runtime
+# 8) Runtime
 ENV SESSION_DIR=./.sessions
 RUN mkdir -p ${SESSION_DIR}
 
