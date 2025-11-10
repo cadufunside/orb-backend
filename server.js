@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg; // Linha de importação CORRETA
+const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
@@ -24,6 +24,9 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
+
+// ⚡ CACHE DE DADOS AO VIVO (PARA EXIBIÇÃO INSTANTÂNEA)
+const liveChatList = new Map(); // Armazena a lista de chats em memória (instantâneo)
 
 function getClientData(sessionId) {
     if (!whatsappClients.has(sessionId)) {
@@ -71,7 +74,8 @@ async function setupDatabase() {
         fromMe BOOLEAN,
         timestamp TIMESTAMPTZ,
         type VARCHAR(100),
-        media_data TEXT
+        media_data TEXT,
+        ack INTEGER 
       );
     `);
     await client.query('COMMIT');
@@ -123,10 +127,10 @@ async function saveMessageToDb(sessionId, client, message) {
     }
     
     await dbClient.query(
-      `INSERT INTO messages (sessionId, id, chatId, body, fromMe, timestamp, type, media_data)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (id) DO NOTHING`,
-      [sessionId, message.id._serialized, chatId, message.body, message.fromMe, timestamp, message.type, mediaData]
+      `INSERT INTO messages (sessionId, id, chatId, body, fromMe, timestamp, type, media_data, ack)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (id) DO UPDATE SET ack = EXCLUDED.ack`,
+      [sessionId, message.id._serialized, chatId, message.body, message.fromMe, timestamp, message.type, mediaData, message.ack || 0]
     );
 
     const lastMessageBody = message.type === 'image' ? (message.body || '[Imagem]') : message.body;
@@ -138,6 +142,20 @@ async function saveMessageToDb(sessionId, client, message) {
     );
     
     await dbClient.query('COMMIT');
+
+    // ⚡ ATUALIZA O CACHE DE RAM (LIVE)
+    if (chat) {
+        const chatObj = {
+            id: chatId,
+            name: chat.name || chat.id.user || 'Sem nome',
+            lastMessageBody: lastMessageBody,
+            lastMessageTimestamp: timestamp.getTime(),
+            isGroup: chat.isGroup
+        };
+        liveChatList.set(chatId, chatObj);
+        broadcastToClients(sessionId, { type: 'chat_update', chat: chatObj });
+    }
+
   } catch (error) {
     if (dbClient) await dbClient.query('ROLLBACK');
     if (!error.message.includes('Session closed')) {
@@ -148,59 +166,24 @@ async function saveMessageToDb(sessionId, client, message) {
   }
 }
 
-async function syncChatsWithDb(sessionId, client, chats) {
-  let dbClient;
-  try {
-    console.log(`Syncing ${chats.length} chats for session ${sessionId}...`);
-    dbClient = await pool.connect();
-    await dbClient.query('BEGIN'); 
-
+async function handleBackgroundMessageSync(sessionId, client, chats) {
+    console.log(`🔄 Iniciando sincronização de mensagens em background para ${sessionId}.`);
     for (const chat of chats) {
-      if (!chat.id || chat.id.user === 'status') continue; 
-
-      const lastMsg = chat.lastMessage;
-      const lastMsgTime = lastMsg ? new Date(lastMsg.timestamp * 1000) : null;
-      const lastMessageBody = lastMsg?.type === 'image' ? (lastMsg.body || '[Imagem]') : lastMsg?.body;
-
-      await dbClient.query(
-        `INSERT INTO chats (sessionId, id, name, isGroup, lastMessageBody, lastMessageTimestamp)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (sessionId, id) DO UPDATE SET
-           name = EXCLUDED.name,
-           lastMessageBody = COALESCE(EXCLUDED.lastMessageBody, chats.lastMessageBody),
-           lastMessageTimestamp = COALESCE(EXCLUDED.lastMessageTimestamp, chats.lastMessageTimestamp)`,
-        [
-          sessionId,
-          chat.id._serialized,
-          chat.name || chat.id.user || 'Sem nome',
-          chat.isGroup,
-          lastMessageBody || null,
-          lastMsgTime
-        ]
-      );
-      
-      if (client.info) {
-          try {
-              const messages = await chat.fetchMessages({ limit: 50 });
-              for (const m of messages) {
-                  await saveMessageToDb(sessionId, client, m);
-              }
-          } catch(e) {
-             if (!e.message.includes('Session closed')) {
-                 console.error(`❌ Falha ao buscar histórico de chat ${chat.id._serialized} para ${sessionId}: ${e.message}`);
-             }
-          }
-      }
+        if (!client.info || !client.isRegistered) return; 
+        try {
+            const messages = await chat.fetchMessages({ limit: 50 });
+            for (const m of messages) {
+                await saveMessageToDb(sessionId, client, m);
+            }
+        } catch(e) {
+            if (!e.message.includes('Session closed')) {
+                // console.error(`❌ Falha ao buscar histórico de chat ${chat.id._serialized} para ${sessionId}: ${e.message}`);
+            }
+        }
     }
-    await dbClient.query('COMMIT'); 
-    console.log(`✅ Sincronização de chats e histórico concluída para ${sessionId}.`);
-  } catch (error) {
-    if (dbClient) await dbClient.query('ROLLBACK');
-    console.error(`❌ Erro ao sincronizar chats para ${sessionId}: ${error.message}`);
-  } finally {
-    if (dbClient) dbClient.release();
-  }
+    console.log(`✅ Sincronização de histórico de mensagens em background finalizada para ${sessionId}.`);
 }
+
 
 async function initializeWhatsApp(sessionId) {
     let clientData = getClientData(sessionId);
@@ -260,18 +243,33 @@ async function initializeWhatsApp(sessionId) {
             await new Promise(resolve => setTimeout(resolve, 3000));
             
             const chats = await client.getChats();
-            await syncChatsWithDb(sessionId, client, chats); 
+            
+            // 1. SINCRONIZAR APENAS OS HEADERS DE CHAT PARA O DB (LÓGICA RÁPIDA)
+            await syncChatList(sessionId, client, chats); 
+            
+            // 2. ENVIAR CHATS PARA O FRONTEND IMEDIATAMENTE (LEITURA DA RAM)
+            const chatObjects = [];
+            for (const chat of chats) {
+                const lastMsg = chat.lastMessage;
+                const lastMessageBody = lastMsg?.body || '';
+                const lastMessageTimestamp = lastMsg?.timestamp * 1000 || Date.now();
+                const chatObj = {
+                    id: chat.id._serialized,
+                    name: chat.name || chat.id.user || 'Sem nome',
+                    lastMessageBody: lastMessageBody,
+                    lastMessageTimestamp: lastMessageTimestamp,
+                    isGroup: chat.isGroup
+                };
+                liveChatList.set(chatObj.id, chatObj);
+                chatObjects.push(chatObj);
+            }
+            broadcastToClients(sessionId, { type: 'chats', chats: chatObjects });
 
-            const dbResult = await pool.query(
-                'SELECT * FROM chats WHERE sessionId = $1 ORDER BY lastMessageTimestamp DESC LIMIT 100',
-                [sessionId]
-            );
-            broadcastToClients(sessionId, { type: 'chats', chats: dbResult.rows });
+            // 3. SINCRONIZAÇÃO DE MENSAGENS EM BACKGROUND (LENTA, NÃO BLOQUEIA O FRONTEND)
+            handleBackgroundMessageSync(sessionId, client, chats); 
 
         } catch (error) {
-            if (!error.message.includes('Invariant Violation')) {
-                console.error(`❌ Erro ao pré-carregar chats para ${sessionId}:`, error.message);
-            }
+            console.error(`❌ Erro ao pré-carregar chats para ${sessionId}:`, error.message);
         }
     });
 
@@ -291,16 +289,19 @@ async function initializeWhatsApp(sessionId) {
 
     client.on('message_create', async (message) => {
         try {
-            await saveMessageToDb(sessionId, client, message);
             const chatId = message.fromMe ? message.to : message.from;
             
+            // 1. Salvar no DB (Assíncrono)
+            await saveMessageToDb(sessionId, client, message); 
+
+            // 2. Broadcast Imediato (LIVE)
             let mediaData = null;
             if (message.hasMedia) {
                 try {
                     const media = await message.downloadMedia();
                     if (media) mediaData = `data:${media.mimetype};base64,${media.data}`;
                 } catch (e) {
-                    console.error(`❌ Falha no download da mídia em message_create: ${e.message}`);
+                    console.error(`❌ Falha no download de mídia em message_create: ${e.message}`);
                 }
             }
             
@@ -313,14 +314,15 @@ async function initializeWhatsApp(sessionId) {
                     fromMe: message.fromMe,
                     timestamp: message.timestamp * 1000,
                     type: message.type,
-                    media_data: mediaData
+                    media_data: mediaData,
+                    ack: message.ack || 0
                 }
             });
         } catch (error) {
             console.error(`Erro ao processar message_create para ${sessionId}: ${error.message}`);
         }
     });
-
+    
     client.on('message_ack', async (message, ack) => {
         let dbClient;
         try {
@@ -338,6 +340,7 @@ async function initializeWhatsApp(sessionId) {
             ack: ack
         });
     });
+
 
     try {
         await client.initialize();
@@ -386,14 +389,9 @@ async function startServer() {
             ws.send(JSON.stringify({ type: 'qr', qr: clientData.qrCode }));
         } else if (clientData.status === 'ready') {
             ws.send(JSON.stringify({ type: 'ready' }));
-            // Envia os chats do DB assim que o Front se conecta se o robô estiver pronto
-            (async () => {
-                const dbResult = await pool.query(
-                    'SELECT * FROM chats WHERE sessionId = $1 ORDER BY lastMessageTimestamp DESC LIMIT 100',
-                    [sessionId]
-                );
-                ws.send(JSON.stringify({ type: 'chats', chats: dbResult.rows }));
-            })();
+            // Envia a lista de chats da RAM assim que o Front se conecta
+            const chatsToSend = Array.from(liveChatList.values()).sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
+            ws.send(JSON.stringify({ type: 'chats', chats: chatsToSend }));
         }
 
         ws.on('message', async (message) => {
@@ -410,12 +408,9 @@ async function startServer() {
                         
                     case 'get_chats':
                         if (status === 'ready') {
-                            console.log(`Buscando chats do banco de dados para ${sessionId}...`);
-                            const dbResult = await pool.query(
-                                'SELECT * FROM chats WHERE sessionId = $1 ORDER BY lastMessageTimestamp DESC LIMIT 100',
-                                [sessionId]
-                            );
-                            ws.send(JSON.stringify({ type: 'chats', chats: dbResult.rows }));
+                            // ⚡ Puxa da RAM (INSTANTÂNEO)
+                            const chatsToSend = Array.from(liveChatList.values()).sort((a, b) => b.lastMessageTimestamp - a.lastMessageTimestamp);
+                            ws.send(JSON.stringify({ type: 'chats', chats: chatsToSend }));
                         }
                         break;
                         
@@ -426,6 +421,7 @@ async function startServer() {
                             const offset = data.offset || 0; 
                             
                             try {
+                                // Puxa do DB com paginação (para histórico completo)
                                 const dbResult = await pool.query(
                                     'SELECT * FROM messages WHERE sessionId = $1 AND chatId = $2 ORDER BY timestamp DESC LIMIT $3 OFFSET $4',
                                     [sessionId, chatId, limit, offset]
@@ -469,6 +465,7 @@ async function startServer() {
         });
         
         ws.on('close', () => {
+            console.log(`❌ Cliente WebSocket desconectado para ${sessionId}`);
             clientData.wsClients.delete(ws);
         });
     });
@@ -487,50 +484,6 @@ app.get('/health', async (req, res) => {
     });
   } catch (dbError) {
     res.status(500).json({ status: 'error', database: 'disconnected', error: dbError.message });
-  }
-});
-
-app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
-  try {
-    const { code } = req.body;
-    const response = await fetch(
-      'https://graph.facebook.com/v18.0/oauth/access_token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: process.env.FB_APP_ID,
-          client_secret: process.env.FB_APP_SECRET,
-          redirect_uri: process.env.REDIRECT_URI,
-          code: code
-        })
-      }
-    );
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/oauth/google/token-exchange', async (req, res) => {
-  try {
-    const { code } = req.body;
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code,
-        client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: process.env.REDIRECT_URI,
-        grant_type: 'authorization_code',
-      }),
-    });
-    const data = await response.json();
-    res.json(data); 
-  } catch (error) {
-    res.status(500).json({ error: error.message });
   }
 });
 
