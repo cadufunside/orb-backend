@@ -1,10 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth } = pkg; // CORREÇÃO DE SINTAXE: APENAS ESTA LINHA IMPORTA Client e LocalAuth
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
+
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+puppeteer.use(StealthPlugin());
 
 const { Pool } = pg;
 const pool = new Pool({
@@ -400,6 +404,7 @@ async function startServer() {
                         
                     case 'get_chats':
                         if (status === 'ready') {
+                            console.log(`Buscando chats do banco de dados para ${sessionId}...`);
                             const dbResult = await pool.query(
                                 'SELECT * FROM chats WHERE sessionId = $1 ORDER BY lastMessageTimestamp DESC LIMIT 100',
                                 [sessionId]
