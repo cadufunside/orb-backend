@@ -22,6 +22,8 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
+const apiRouter = express.Router();
+
 function getClientData(sessionId) {
     if (!whatsappClients.has(sessionId)) {
         whatsappClients.set(sessionId, {
@@ -473,8 +475,6 @@ async function startServer() {
             clientData.wsClients.delete(ws);
         });
     });
-
-    const apiRouter = express.Router();
 
     apiRouter.get('/health', async (req, res) => {
       try {
