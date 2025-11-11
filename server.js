@@ -6,10 +6,6 @@ import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
 
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-puppeteer.use(StealthPlugin());
-
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -218,6 +214,7 @@ async function initializeWhatsApp(sessionId) {
     const client = new Client({
         authStrategy: new LocalAuth({
             clientId: sessionId,
+            // 🛑 CORREÇÃO CRÍTICA DE PERMISSÃO: Mudar o caminho para um diretório gravável
             dataPath: '/tmp/wwebjs-sessions' 
         }),
         puppeteer: {
