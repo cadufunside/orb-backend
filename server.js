@@ -6,6 +6,10 @@ import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
 
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+puppeteer.use(StealthPlugin());
+
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -214,7 +218,7 @@ async function initializeWhatsApp(sessionId) {
     const client = new Client({
         authStrategy: new LocalAuth({
             clientId: sessionId,
-            // 🛑 CORREÇÃO CRÍTICA DE PERMISSÃO: Mudar o caminho para um diretório gravável
+            // 🛑 CORREÇÃO CRÍTICA DE PERMISSÃO FINAL: Mudar o caminho para um diretório gravável
             dataPath: '/tmp/wwebjs-sessions' 
         }),
         puppeteer: {
@@ -402,6 +406,7 @@ async function startServer() {
                         
                     case 'get_chats':
                         if (status === 'ready') {
+                            console.log(`Buscando chats do banco de dados para ${sessionId}...`);
                             const dbResult = await pool.query(
                                 'SELECT * FROM chats WHERE sessionId = $1 ORDER BY lastMessageTimestamp DESC LIMIT 100',
                                 [sessionId]
