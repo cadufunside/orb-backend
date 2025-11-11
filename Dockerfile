@@ -6,6 +6,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 
 # 1. Instala dependências de sistema para o Chromium e PostgreSQL
+# Adiciona as ferramentas de build necessárias (python3, make, g++)
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -25,6 +26,8 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 COPY package.json package-lock.json* ./
 
 # 🛑 4. CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
+# --no-scripts: Ignora scripts de compilação nativa que travam o build
+# --unsafe-perm: Necessário para o NPM rodar a instalação no ambiente Docker
 RUN npm install --omit=dev --no-scripts --unsafe-perm
 
 # 5. Copia o código-fonte
