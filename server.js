@@ -5,6 +5,11 @@ const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
+import http from 'http';
+
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+puppeteer.use(StealthPlugin());
 
 const { Pool } = pg;
 const pool = new Pool({
@@ -54,7 +59,7 @@ async function setupDatabase() {
         name VARCHAR(255),
         isGroup BOOLEAN,
         lastMessageBody TEXT,
-        lastMessageTimestamp TIMESTAMPTZ,
+        lastMessageTimestamp TIMESTZ,
         PRIMARY KEY (sessionId, id)
       );
     `);
@@ -358,12 +363,22 @@ async function startServer() {
   try {
     await setupDatabase();
     
-    const server = app.listen(PORT, () => {
-      console.log(`🚀 Backend rodando na porta ${PORT}`);
-    });
+    const server = http.createServer(app);
 
-    let wss = new WebSocketServer({ server, path: '/whatsapp' });
+    let wss = new WebSocketServer({ noServer: true });
     console.log('✅ WebSocket Server criado');
+    
+    server.on('upgrade', (request, socket, head) => {
+        const url = new URL(request.url, `http://${request.headers.host}`);
+        
+        if (url.pathname === '/api/whatsapp') {
+            wss.handleUpgrade(request, socket, head, (ws) => {
+                wss.emit('connection', ws, request);
+            });
+        } else {
+            socket.destroy();
+        }
+    });
     
     wss.on('connection', (ws, req) => {
         const urlParams = new URLSearchParams(req.url.split('?')[1]);
@@ -462,69 +477,77 @@ async function startServer() {
             clientData.wsClients.delete(ws);
         });
     });
+
+    const apiRouter = express.Router();
+
+    apiRouter.get('/health', async (req, res) => {
+      try {
+        await pool.query('SELECT 1');
+        res.json({ 
+          status: 'ok',
+          database: 'connected',
+          timestamp: new Date().toISOString() 
+        });
+      } catch (dbError) {
+        res.status(500).json({ status: 'error', database: 'disconnected', error: dbError.message });
+      }
+    });
+
+    apiRouter.post('/oauth/facebook/token-exchange', async (req, res) => {
+      try {
+        const { code } = req.body;
+        const response = await fetch(
+          'https://graph.facebook.com/v18.0/oauth/access_token',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              client_id: process.env.FB_APP_ID,
+              client_secret: process.env.FB_APP_SECRET,
+              redirect_uri: process.env.REDIRECT_URI,
+              code: code
+            })
+          }
+        );
+        const data = await response.json();
+        res.json(data);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    apiRouter.post('/oauth/google/token-exchange', async (req, res) => {
+      try {
+        const { code } = req.body;
+        const response = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code,
+            client_id: process.env.GOOGLE_CLIENT_ID,
+            client_secret: process.env.GOOGLE_CLIENT_SECRET,
+            redirect_uri: process.env.REDIRECT_URI,
+            grant_type: 'authorization_code',
+          }),
+        });
+        const data = await response.json();
+        res.json(data); 
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.use('/api', apiRouter);
+    
+    server.listen(PORT, () => {
+      console.log(`🚀 Backend (HTTP e WS) rodando na porta ${PORT}`);
+    });
+
   } catch (error) {
+    console.error('❌ Falha fatal ao iniciar o servidor:', error);
     process.exit(1);
   }
 }
-
-app.get('/health', async (req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    res.json({ 
-      status: 'ok',
-      database: 'connected',
-      timestamp: new Date().toISOString() 
-    });
-  } catch (dbError) {
-    res.status(500).json({ status: 'error', database: 'disconnected', error: dbError.message });
-m  }
-});
-
-app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
-  try {
-    const { code } = req.body;
-    const response = await fetch(
-    
-      'https://graph.facebook.com/v18.0/oauth/access_token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: process.env.FB_APP_ID,
-          client_secret: process.env.FB_APP_SECRET,
-          redirect_uri: process.env.REDIRECT_URI,
-          code: code
-        })
-      }
-    );
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/oauth/google/token-exchange', async (req, res) => {
-  try {
-    const { code } = req.body;
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code,
-        client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: process.env.REDIRECT_URI,
-        grant_type: 'authorization_code',
-      }),
-    });
-    const data = await response.json();
-JSON.parse(data);
-    res.json(data); 
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
 
 process.on('unhandledRejection', (error) => console.error(error));
 process.on('uncaughtException', (error) => console.error(error));
