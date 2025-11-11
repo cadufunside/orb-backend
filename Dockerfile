@@ -1,12 +1,21 @@
-FROM node:18-alpine
+# === STAGE 1: BUILDER (Instala Node Modules) ===
+FROM node:18-alpine AS builder
 
-# Define o ambiente como produção
-ENV NODE_ENV=production
+# Instala dependências de build (para PostgreSQL/nativo)
+RUN apk update && apk add --no-cache python3 make g++
 
 WORKDIR /app
 
-# 1. Instala dependências de sistema (apenas as de browser e tini)
-# REMOVE: python3 make g++ postgresql-client (para parar a falha de compilação)
+# Copia apenas os manifestos
+COPY package.json package-lock.json* ./
+
+# Instala dependências (com tolerância máxima para evitar travamento)
+RUN npm install --omit=dev --unsafe-perm
+
+# === STAGE 2: FINAL (Ambiente de Execução Leve) ===
+FROM node:18-alpine
+
+# Instala dependências de sistema (Chromium, Tini, PG Client)
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -14,23 +23,22 @@ RUN apk add --no-cache \
     harfbuzz \
     ca-certificates \
     ttf-freefont \
-    tini 
+    tini \
+    postgresql-client
 
-# 2. Configura as variáveis do Puppeteer
+# Configura as variáveis do Puppeteer
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-# 3. Copia o package.json e instala as dependências
-COPY package.json package-lock.json* ./
+WORKDIR /app
 
-# 🛑 4. CORREÇÃO FINAL DE INSTALAÇÃO: Usamos --no-scripts e --unsafe-perm
-# A instalação será mais leve e rápida, focada nas dependências do Node.
-RUN npm install --omit=dev --no-scripts --unsafe-perm
+# Copia node_modules do estágio de build (Otimização crítica!)
+COPY --from=builder /app/node_modules ./node_modules
 
-# 5. Copia o código-fonte
+# Copia o código-fonte (server.js, etc.)
 COPY . .
 
-# 6. Comando de Início
+# Comando de Início
 EXPOSE 3000
 USER node
 ENTRYPOINT ["/sbin/tini", "--"]
