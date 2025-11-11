@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:18-alpine
 
 # Define o ambiente como produção
 ENV NODE_ENV=production
@@ -24,13 +24,15 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 # 3. Copia o package.json e instala as dependências
 COPY package.json package-lock.json* ./
 
-# 🛑 CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
+# 🛑 4. CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
+# --no-scripts: Ignora scripts de compilação nativa que travam o build
+# --unsafe-perm: Necessário para o NPM rodar a instalação no ambiente Docker
 RUN npm install --omit=dev --no-scripts --unsafe-perm
 
-# 4. Copia o código-fonte
+# 5. Copia o código-fonte
 COPY . .
 
-# 5. Comando de Início
+# 6. Comando de Início
 EXPOSE 3000
 USER node
 ENTRYPOINT ["/sbin/tini", "--"]
