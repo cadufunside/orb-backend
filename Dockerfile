@@ -24,12 +24,10 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 # 3. Copia o package.json e instala as dependências
 COPY package.json package-lock.json* ./
 
-# 🛑 4. CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
-# --no-scripts: Ignora scripts de compilação nativa que travam o build
-# --unsafe-perm: Necessário para o NPM rodar a instalação no ambiente Docker
+# 🛑 CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
 RUN npm install --omit=dev --no-scripts --unsafe-perm
 
-# 5. Copia o código-fonte
+# 4. Copia o código-fonte
 COPY . .
 
 # 6. Comando de Início
