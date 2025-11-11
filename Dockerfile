@@ -1,22 +1,11 @@
-# Base estável e leve
 FROM node:20-alpine
 
-# Hardening e Configurações de Rede do NPM (Mantendo as suas regras robustas)
-ENV NODE_ENV=production \
-    NPM_CONFIG_AUDIT=false \
-    NPM_CONFIG_FUND=false \
-    NPM_CONFIG_PROGRESS=false \
-    NPM_CONFIG_PREFER_ONLINE=true \
-    NPM_CONFIG_FETCH_RETRIES=9 \
-    NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
-    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=45000 \
-    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=240000 \
-    NPM_CONFIG_FETCH_TIMEOUT=900000
+# Define o ambiente como produção
+ENV NODE_ENV=production
 
 WORKDIR /app
 
-# 🛑 1. ADICIONAR DEPENDÊNCIAS CRÍTICAS DE SISTEMA (Chromium + PG)
-# Estas são as bibliotecas que faltavam para o npm install e para o WhatsApp
+# 1. Instala dependências de sistema para o Chromium e PostgreSQL
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -26,44 +15,24 @@ RUN apk add --no-cache \
     ttf-freefont \
     tini \
     postgresql-client \
-    # Adicionais para garantir a compilação de bibliotecas nativas como 'pg'
-    python3 make g++
+    # Dependências de build
+    python3 make g++ 
 
-# Configura o Puppeteer para usar o Chromium do APK (evita download)
+# 2. Configura as variáveis do Puppeteer
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-# Copia os manifests
+# 3. Copia o package.json e instala as dependências
 COPY package.json package-lock.json* ./
 
-# 🛑 2. INSTALAÇÃO (Mantendo sua lógica robusta)
-# O comando abaixo é a sua lógica que tenta usar 'npm ci' e faz fallback.
-RUN if [ -f package-lock.json ]; then \
-      npm ci --omit=dev --ignore-scripts --loglevel=warn ; \
-    else \
-      npm i --package-lock-only --loglevel=warn && \
-      npm ci --omit=dev --ignore-scripts --loglevel=warn ; \
-    fi
+# 🛑 4. CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
+RUN npm install --omit=dev --no-scripts --unsafe-perm
 
-# 🛑 3. CORREÇÃO DE PERMISSÃO EM RUNTIME (Evita EACCES)
-# Movemos a criação de pastas para o Dockerfile para o usuário 'root' criar, 
-# e o Node.js pode usar o /tmp, que é sempre gravável.
-ENV SESSION_DIR=/tmp/wwebjs-sessions
-RUN mkdir -p ${SESSION_DIR} && chown -R node:node ${SESSION_DIR}
-
-# Copia o restante do código
+# 5. Copia o código-fonte
 COPY . .
 
-# Permissão para o usuário node (evita EACCES em /app)
-# É seguro mudar para o usuário 'node' porque a pasta de sessão agora está em /tmp
-RUN chown -R node:node /app
+# 6. Comando de Início
+EXPOSE 3000
 USER node
-
-# 6) Porta e usuário
-ENV PORT=8080
-EXPOSE 8080
-
-ENTRYPOINT ["/sbin/tini","--"]
-
-# 7) Start do app
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "server.js"]
