@@ -218,7 +218,6 @@ async function initializeWhatsApp(sessionId) {
     const client = new Client({
         authStrategy: new LocalAuth({
             clientId: sessionId,
-            // 🛑 CORREÇÃO DE PERMISSÃO FINAL: Mudar o caminho para um diretório gravável
             dataPath: '/tmp/wwebjs-sessions' 
         }),
         puppeteer: {
@@ -406,7 +405,6 @@ async function startServer() {
                         
                     case 'get_chats':
                         if (status === 'ready') {
-                            console.log(`Buscando chats do banco de dados para ${sessionId}...`);
                             const dbResult = await pool.query(
                                 'SELECT * FROM chats WHERE sessionId = $1 ORDER BY lastMessageTimestamp DESC LIMIT 100',
                                 [sessionId]
@@ -520,4 +518,17 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
         client_id: process.env.GOOGLE_CLIENT_ID,
         client_secret: process.env.GOOGLE_CLIENT_SECRET,
         redirect_uri: process.env.REDIRECT_URI,
-        grant_type: '
+        grant_type: 'authorization_code',
+      }),
+    });
+    const data = await response.json();
+    res.json(data); 
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+process.on('unhandledRejection', (error) => console.error(error));
+process.on('uncaughtException', (error) => console.error(error));
+
+startServer();
