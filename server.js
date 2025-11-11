@@ -6,6 +6,10 @@ import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
 
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+puppeteer.use(StealthPlugin());
+
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -214,7 +218,7 @@ async function initializeWhatsApp(sessionId) {
     const client = new Client({
         authStrategy: new LocalAuth({
             clientId: sessionId,
-            // 🛑 CORREÇÃO DE PERMISSÃO FINAL
+            // 🛑 CORREÇÃO DE PERMISSÃO FINAL: Mudar o caminho para um diretório gravável
             dataPath: '/tmp/wwebjs-sessions' 
         }),
         puppeteer: {
@@ -516,17 +520,4 @@ app.post('/api/oauth/google/token-exchange', async (req, res) => {
         client_id: process.env.GOOGLE_CLIENT_ID,
         client_secret: process.env.GOOGLE_CLIENT_SECRET,
         redirect_uri: process.env.REDIRECT_URI,
-        grant_type: 'authorization_code',
-      }),
-    });
-    const data = await response.json();
-    res.json(data); 
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-process.on('unhandledRejection', (error) => console.error(error));
-process.on('uncaughtException', (error) => console.error(error));
-
-startServer();
+        grant_type: '
