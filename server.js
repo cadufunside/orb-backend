@@ -5,7 +5,6 @@ const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 import pg from 'pg';
-import http from 'http'; // Importar http para o WebSocket
 
 const { Pool } = pg;
 const pool = new Pool({
@@ -21,12 +20,6 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
-
-// ============================================
-// 🛑 CORREÇÃO FINAL: CRIAR UM ROUTER PARA O /api
-// ============================================
-const apiRouter = express.Router();
-
 
 function getClientData(sessionId) {
     if (!whatsappClients.has(sessionId)) {
@@ -365,25 +358,12 @@ async function startServer() {
   try {
     await setupDatabase();
     
-    // 🛑 MUDANÇA: Criar um servidor HTTP explícito para o Express E o WebSocket
-    const server = http.createServer(app);
-
-    let wss = new WebSocketServer({ noServer: true }); // Criar WS sem servidor
-    console.log('✅ WebSocket Server criado');
-    
-    // 🛑 MUDANÇA: Lógica de upgrade para o WebSocket
-    server.on('upgrade', (request, socket, head) => {
-        const url = new URL(request.url, `http://${request.headers.host}`);
-        
-        // Apenas fazer upgrade se o caminho for /api/whatsapp (o que o Base44 espera)
-        if (url.pathname === '/api/whatsapp') {
-            wss.handleUpgrade(request, socket, head, (ws) => {
-                wss.emit('connection', ws, request);
-            });
-        } else {
-            socket.destroy();
-        }
+    const server = app.listen(PORT, () => {
+      console.log(`🚀 Backend rodando na porta ${PORT}`);
     });
+
+    let wss = new WebSocketServer({ server, path: '/whatsapp' });
+    console.log('✅ WebSocket Server criado');
     
     wss.on('connection', (ws, req) => {
         const urlParams = new URLSearchParams(req.url.split('?')[1]);
@@ -482,81 +462,69 @@ async function startServer() {
             clientData.wsClients.delete(ws);
         });
     });
-
-    // ============================================
-    // ROTAS HTTP (Agora dentro do Router)
-    // ============================================
-
-    apiRouter.get('/health', async (req, res) => {
-      try {
-        await pool.query('SELECT 1');
-        res.json({ 
-          status: 'ok',
-          database: 'connected',
-          timestamp: new Date().toISOString() 
-        });
-      } catch (dbError) {
-        res.status(500).json({ status: 'error', database: 'disconnected', error: dbError.message });
-      }
-    });
-
-    apiRouter.post('/oauth/facebook/token-exchange', async (req, res) => {
-      try {
-        const { code } = req.body;
-        const response = await fetch(
-          'https://graph.facebook.com/v18.0/oauth/access_token',
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              client_id: process.env.FB_APP_ID,
-              client_secret: process.env.FB_APP_SECRET,
-              redirect_uri: process.env.REDIRECT_URI,
-              code: code
-            })
-          }
-        );
-        const data = await response.json();
-        res.json(data);
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
-    });
-
-    apiRouter.post('/oauth/google/token-exchange', async (req, res) => {
-      try {
-        const { code } = req.body;
-        const response = await fetch('https://oauth2.googleapis.com/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            code,
-            client_id: process.env.GOOGLE_CLIENT_ID,
-    In       client_secret: process.env.GOOGLE_CLIENT_SECRET,
-            redirect_uri: process.env.REDIRECT_URI,
-            grant_type: 'authorization_code',
-          }),
-        });
-        const data = await response.json();
-        res.json(data); 
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
-    });
-
-    // 🛑 MUDANÇA: Ligar o prefixo /api ao Express
-    app.use('/api', apiRouter);
-    
-    // Iniciar o servidor HTTP
-    server.listen(PORT, () => {
-      console.log(`🚀 Backend (HTTP e WS) rodando na porta ${PORT}`);
-    });
-
   } catch (error) {
-    console.error('❌ Falha fatal ao iniciar o servidor:', error);
     process.exit(1);
   }
 }
+
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ 
+      status: 'ok',
+      database: 'connected',
+      timestamp: new Date().toISOString() 
+    });
+  } catch (dbError) {
+    res.status(500).json({ status: 'error', database: 'disconnected', error: dbError.message });
+m  }
+});
+
+app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
+  try {
+    const { code } = req.body;
+    const response = await fetch(
+    
+      'https://graph.facebook.com/v18.0/oauth/access_token',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          client_id: process.env.FB_APP_ID,
+          client_secret: process.env.FB_APP_SECRET,
+          redirect_uri: process.env.REDIRECT_URI,
+          code: code
+        })
+      }
+    );
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/oauth/google/token-exchange', async (req, res) => {
+  try {
+    const { code } = req.body;
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: process.env.REDIRECT_URI,
+        grant_type: 'authorization_code',
+      }),
+    });
+    const data = await response.json();
+JSON.parse(data);
+    res.json(data); 
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 process.on('unhandledRejection', (error) => console.error(error));
 process.on('uncaughtException', (error) => console.error(error));
