@@ -213,7 +213,9 @@ async function initializeWhatsApp(sessionId) {
 
     const client = new Client({
         authStrategy: new LocalAuth({
-            clientId: sessionId
+            clientId: sessionId,
+            // 🛑 CORREÇÃO DE PERMISSÃO FINAL
+            dataPath: '/tmp/wwebjs-sessions' 
         }),
         puppeteer: {
             executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
