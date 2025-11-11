@@ -1,12 +1,12 @@
-FROM node:20-alpine
+FROM node:18-alpine
 
 # Define o ambiente como produção
 ENV NODE_ENV=production
 
 WORKDIR /app
 
-# 1. Instala dependências de sistema para o Chromium e PostgreSQL
-# Adiciona as ferramentas de build necessárias (python3, make, g++)
+# 1. Instala dependências de sistema (apenas as de browser e tini)
+# REMOVE: python3 make g++ postgresql-client (para parar a falha de compilação)
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -14,9 +14,7 @@ RUN apk add --no-cache \
     harfbuzz \
     ca-certificates \
     ttf-freefont \
-    tini \
-    postgresql-client \
-    python3 make g++ 
+    tini 
 
 # 2. Configura as variáveis do Puppeteer
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
@@ -25,9 +23,8 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 # 3. Copia o package.json e instala as dependências
 COPY package.json package-lock.json* ./
 
-# 🛑 4. CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
-# --no-scripts: Ignora scripts de compilação nativa que travam o build
-# --unsafe-perm: Necessário para o NPM rodar a instalação no ambiente Docker
+# 🛑 4. CORREÇÃO FINAL DE INSTALAÇÃO: Usamos --no-scripts e --unsafe-perm
+# A instalação será mais leve e rápida, focada nas dependências do Node.
 RUN npm install --omit=dev --no-scripts --unsafe-perm
 
 # 5. Copia o código-fonte
