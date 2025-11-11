@@ -5,8 +5,7 @@ ENV NODE_ENV=production
 
 WORKDIR /app
 
-# 1. Instala dependências de sistema para o Chromium e PostgreSQL
-# Adiciona as ferramentas de build necessárias (python3, make, g++)
+# 1. Instala dependências de sistema (Chromium, Tini, e cliente PG)
 RUN apk add --no-cache \
     chromium \
     nss \
@@ -25,14 +24,13 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 # 3. Copia o package.json e instala as dependências
 COPY package.json package-lock.json* ./
 
-# 🛑 4. CORREÇÃO FINAL DE INSTALAÇÃO: Usando flags de tolerância extrema
-# Isso resolve o travamento do "pg"
+# 🛑 CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
 RUN npm install --omit=dev --no-scripts --unsafe-perm
 
-# 5. Copia o código-fonte
+# 4. Copia o código-fonte
 COPY . .
 
-# 6. Comando de Início
+# 5. Comando de Início
 EXPOSE 3000
 USER node
 ENTRYPOINT ["/sbin/tini", "--"]
