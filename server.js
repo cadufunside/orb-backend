@@ -7,10 +7,6 @@ import { WebSocketServer } from 'ws';
 import pg from 'pg';
 import http from 'http';
 
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-puppeteer.use(StealthPlugin());
-
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -59,7 +55,7 @@ async function setupDatabase() {
         name VARCHAR(255),
         isGroup BOOLEAN,
         lastMessageBody TEXT,
-        lastMessageTimestamp TIMESTZ,
+        lastMessageTimestamp TIMESTAMPTZ,
         PRIMARY KEY (sessionId, id)
       );
     `);
