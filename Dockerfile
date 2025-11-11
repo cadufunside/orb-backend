@@ -15,7 +15,6 @@ RUN apk add --no-cache \
     ttf-freefont \
     tini \
     postgresql-client \
-    # Dependências de build
     python3 make g++ 
 
 # 2. Configura as variáveis do Puppeteer
