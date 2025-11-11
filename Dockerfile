@@ -24,10 +24,11 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 # 3. Copia o package.json e instala as dependências
 COPY package.json package-lock.json* ./
 
-# 🛑 CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
+# 🛑 4. CORREÇÃO FINAL DE INSTALAÇÃO: Rápido e anti-travamento
+# Este comando tem as flags para evitar que a compilação do PG trave
 RUN npm install --omit=dev --no-scripts --unsafe-perm
 
-# 4. Copia o código-fonte
+# 5. Copia o código-fonte
 COPY . .
 
 # 6. Comando de Início
