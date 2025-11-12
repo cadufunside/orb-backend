@@ -1,4 +1,4 @@
-// ⚡ BACKEND v34 - IMPORT CORRIGIDO + ROTEAMENTO COMPLETO
+// ⚡ BACKEND v35 - IMPORT CORRIGIDO + ROTEAMENTO COMPLETO
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
