@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "54.0.0",
-  "description": "Backend v54 - Correção Definitiva do Exists",
+  "version": "55.0.0",
+  "description": "Backend v55 - Logs Extremos para Debug",
   "main": "server.js",
   "type": "module",
   "engines": {
