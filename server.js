@@ -1,190 +1,314 @@
-// backend/server.js
+// ⚡ BACKEND v34 - IMPORT CORRIGIDO + ROTEAMENTO COMPLETO
 import express from 'express';
 import cors from 'cors';
-import { Client, LocalAuth } from 'whatsapp-web.js';
+import pkg from 'whatsapp-web.js';
+const { Client, LocalAuth } = pkg;
 import qrcode from 'qrcode';
 import { WebSocketServer } from 'ws';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors({
-  origin: '*', // Em produção, especifique os domínios
-  credentials: true
-}));
-
+app.use(cors({ origin: '*', credentials: true }));
 app.use(express.json());
 
-// ============================================
-// VARIÁVEIS GLOBAIS
-// ============================================
+let whatsappClients = {};
+let wsClients = {};
 
-let whatsappClient = null;
-let currentQR = null;
-let clientStatus = 'disconnected';
-let sessionData = null;
-
-// ============================================
-// HEALTH CHECK
-// ============================================
-
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    whatsapp: clientStatus,
-    timestamp: new Date().toISOString() 
+// ✅ HEALTH CHECK
+app.get('/api/health', (req, res) => {
+  const sessionStatuses = {};
+  Object.keys(whatsappClients).forEach(sessionId => {
+    sessionStatuses[sessionId] = whatsappClients[sessionId]?.status || 'disconnected';
   });
+  res.json({ status: 'ok', timestamp: Date.now(), sessions: sessionStatuses });
 });
 
-// ============================================
-// ENDPOINTS REST (FALLBACK SEM WEBSOCKET)
-// ============================================
+const server = app.listen(PORT, () => {
+  console.log('🚀 Backend porta', PORT);
+  console.log('✅ Pronto para conexões WhatsApp');
+});
 
-// Gerar QR Code via HTTP
-app.post('/api/whatsapp/qr', async (req, res) => {
+// ✅ WEBSOCKET SERVER
+let wss;
+try {
+  wss = new WebSocketServer({ server, path: '/api/whatsapp' });
+  console.log('✅ WebSocket pronto em /api/whatsapp');
+  
+  wss.on('connection', (ws, req) => {
+    const url = new URL(req.url, 'http://' + req.headers.host);
+    const sessionId = url.searchParams.get('sessionId');
+    
+    console.log('📱 Cliente conectado:', sessionId);
+    
+    if (!sessionId) {
+      ws.close(1008, 'sessionId obrigatório');
+      return;
+    }
+    
+    if (!wsClients[sessionId]) {
+      wsClients[sessionId] = new Set();
+    }
+    wsClients[sessionId].add(ws);
+    
+    const client = whatsappClients[sessionId];
+    ws.send(JSON.stringify({ event: 'status', status: client?.status || 'disconnected' }));
+    
+    if (client?.currentQR && client?.status === 'qr_ready') {
+      ws.send(JSON.stringify({ event: 'qr', qr: client.currentQR }));
+    } else if (client?.status === 'ready') {
+      ws.send(JSON.stringify({ event: 'session.ready' }));
+    }
+    
+    ws.on('close', () => {
+      console.log('🔌 Cliente desconectado:', sessionId);
+      if (wsClients[sessionId]) {
+        wsClients[sessionId].delete(ws);
+        if (wsClients[sessionId].size === 0) {
+          delete wsClients[sessionId];
+        }
+      }
+    });
+  });
+} catch (error) {
+  console.warn('⚠️ WebSocket erro:', error.message);
+}
+
+function broadcastToSession(sessionId, data) {
+  const message = JSON.stringify(data);
+  const clients = wsClients[sessionId];
+  if (clients) {
+    clients.forEach(client => {
+      if (client.readyState === 1) {
+        client.send(message);
+      }
+    });
+  }
+}
+
+// ✅ INICIAR SESSÃO
+app.post('/api/sessions/:sessionId/start', async (req, res) => {
+  const { sessionId } = req.params;
+  console.log('📤 POST /api/sessions/' + sessionId + '/start');
+  
   try {
-    console.log('📱 Solicitação de QR Code via HTTP');
-    
-    if (!whatsappClient) {
-      await initializeWhatsApp();
-    }
-    
-    if (currentQR) {
-      res.json({ 
-        success: true, 
-        qr: currentQR,
-        status: clientStatus
-      });
-    } else {
-      res.json({ 
-        success: false, 
-        message: 'QR Code sendo gerado...',
-        status: clientStatus
+    if (whatsappClients[sessionId] && whatsappClients[sessionId].status !== 'disconnected') {
+      return res.json({ 
+        error: 'Sessão já existe',
+        status: whatsappClients[sessionId].status 
       });
     }
+    
+    await initializeWhatsApp(sessionId);
+    
+    // Aguarda até 10 segundos pelo QR Code
+    let attempts = 0;
+    while (attempts < 20) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      if (whatsappClients[sessionId]?.currentQR) {
+        return res.json({ 
+          qr_base64: whatsappClients[sessionId].currentQR,
+          status: 'qr_ready'
+        });
+      }
+      
+      if (whatsappClients[sessionId]?.status === 'ready') {
+        return res.json({ status: 'ready' });
+      }
+      
+      attempts++;
+    }
+    
+    return res.json({ error: 'Timeout aguardando QR Code' });
+    
   } catch (error) {
-    console.error('❌ Erro ao gerar QR:', error);
+    console.error('❌ Erro start:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Verificar status via HTTP
-app.get('/api/whatsapp/status', (req, res) => {
-  res.json({
-    status: clientStatus,
-    session: sessionData,
-    hasClient: !!whatsappClient
-  });
-});
-
-// ============================================
-// WEBSOCKET (OPCIONAL - MELHOR PERFORMANCE)
-// ============================================
-
-const server = app.listen(PORT, () => {
-  console.log(`🚀 Backend rodando na porta ${PORT}`);
-  console.log(`📱 WhatsApp endpoint: /api/whatsapp/qr`);
-  console.log(`🔌 WebSocket endpoint: /whatsapp`);
-});
-
-let wss;
-let wsClients = new Set();
-
-try {
-  wss = new WebSocketServer({ server, path: '/whatsapp' });
-  console.log('✅ WebSocket Server criado');
+// ✅ STATUS DA SESSÃO
+app.get('/api/sessions/:sessionId/status', (req, res) => {
+  const { sessionId } = req.params;
+  console.log('📤 GET /api/sessions/' + sessionId + '/status');
   
-  wss.on('connection', (ws) => {
-    console.log('✅ Cliente WebSocket conectado');
-    wsClients.add(ws);
-    
-    ws.send(JSON.stringify({
-      type: 'status',
-      status: clientStatus
-    }));
-    
-    ws.on('message', async (message) => {
-      try {
-        const data = JSON.parse(message);
-        console.log('📨 Mensagem WS recebida:', data.type);
-        
-        switch (data.type) {
-          case 'request_qr':
-            if (!whatsappClient) {
-              await initializeWhatsApp();
-            }
-            if (currentQR) {
-              ws.send(JSON.stringify({ type: 'qr', qr: currentQR }));
-            }
-            break;
-            
-          case 'send_message':
-            if (whatsappClient) {
-              await whatsappClient.sendMessage(data.chatId, data.message);
-            }
-            break;
-            
-          case 'disconnect':
-            if (whatsappClient) {
-              await whatsappClient.destroy();
-              whatsappClient = null;
-              currentQR = null;
-              clientStatus = 'disconnected';
-            }
-            break;
-        }
-      } catch (error) {
-        console.error('❌ Erro ao processar mensagem WS:', error);
-        ws.send(JSON.stringify({
-          type: 'error',
-          message: error.message
-        }));
-      }
-    });
-    
-    ws.on('close', () => {
-      console.log('❌ Cliente WebSocket desconectado');
-      wsClients.delete(ws);
-    });
+  const client = whatsappClients[sessionId];
+  
+  if (!client) {
+    return res.json({ ready: false, status: 'disconnected' });
+  }
+  
+  res.json({ 
+    ready: client.status === 'ready',
+    status: client.status,
+    qr_base64: client.currentQR || null
   });
-} catch (error) {
-  console.warn('⚠️ WebSocket não disponível:', error.message);
-  console.log('📡 Usando apenas HTTP endpoints');
-}
+});
 
-// ============================================
-// BROADCAST PARA TODOS OS CLIENTES WS
-// ============================================
-
-function broadcastToClients(data) {
-  const message = JSON.stringify(data);
-  wsClients.forEach(client => {
-    if (client.readyState === 1) {
-      client.send(message);
-    }
-  });
-}
-
-// ============================================
-// INICIALIZAR WHATSAPP
-// ============================================
-
-async function initializeWhatsApp() {
+// ✅ BUSCAR CONVERSAS (THREADS)
+app.get('/api/sessions/:sessionId/threads', async (req, res) => {
+  const { sessionId } = req.params;
+  const limit = parseInt(req.query.limit) || 50;
+  console.log('📤 GET /api/sessions/' + sessionId + '/threads');
+  
   try {
-    console.log('🔄 Inicializando WhatsApp Web.js...');
+    const client = whatsappClients[sessionId];
     
-    if (whatsappClient) {
-      console.log('⚠️ Cliente já existe, destruindo...');
-      await whatsappClient.destroy();
+    if (!client || client.status !== 'ready') {
+      return res.status(400).json({ error: 'Sessão não conectada' });
     }
     
-    clientStatus = 'initializing';
-    currentQR = null;
+    const whatsappClient = client.whatsappClient;
+    const chats = await whatsappClient.getChats();
     
-    whatsappClient = new Client({
-      authStrategy: new LocalAuth({
-        clientId: 'orb-crm-' + Date.now()
-      }),
+    const threads = [];
+    
+    for (const chat of chats.slice(0, limit)) {
+      let profilePicUrl = null;
+      try {
+        profilePicUrl = await chat.getProfilePicUrl();
+      } catch (e) {}
+      
+      threads.push({
+        jid: chat.id._serialized,
+        name: chat.name || chat.id.user || 'Sem nome',
+        is_group: chat.isGroup,
+        unread_count: chat.unreadCount || 0,
+        last_message: chat.lastMessage ? {
+          text: chat.lastMessage.body || '',
+          timestamp: chat.lastMessage.timestamp * 1000
+        } : null,
+        profile_pic_url: profilePicUrl
+      });
+    }
+    
+    threads.sort((a, b) => {
+      const aTime = a.last_message?.timestamp || 0;
+      const bTime = b.last_message?.timestamp || 0;
+      return bTime - aTime;
+    });
+    
+    res.json({ threads });
+    
+  } catch (error) {
+    console.error('❌ Erro threads:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ BUSCAR HISTÓRICO DE MENSAGENS
+app.get('/api/sessions/:sessionId/messages/:jid/history', async (req, res) => {
+  const { sessionId, jid } = req.params;
+  const limit = parseInt(req.query.limit) || 50;
+  const offset = parseInt(req.query.offset) || 0;
+  console.log('📤 GET /api/sessions/' + sessionId + '/messages/' + jid + '/history');
+  
+  try {
+    const client = whatsappClients[sessionId];
+    
+    if (!client || client.status !== 'ready') {
+      return res.status(400).json({ error: 'Sessão não conectada' });
+    }
+    
+    const whatsappClient = client.whatsappClient;
+    const chat = await whatsappClient.getChatById(jid);
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat não encontrado' });
+    }
+    
+    const messages = await chat.fetchMessages({ limit: limit });
+    
+    const formattedMessages = [];
+    
+    for (const msg of messages) {
+      let mediaUrl = null;
+      let mediaType = null;
+      
+      if (msg.hasMedia) {
+        try {
+          const media = await msg.downloadMedia();
+          if (media) {
+            mediaUrl = 'data:' + media.mimetype + ';base64,' + media.data;
+            mediaType = media.mimetype;
+          }
+        } catch (e) {
+          console.error('⚠️ Erro mídia:', e.message);
+        }
+      }
+      
+      formattedMessages.push({
+        id: msg.id._serialized,
+        text: msg.body || '',
+        from_me: msg.fromMe,
+        timestamp: msg.timestamp * 1000,
+        type: msg.type,
+        ack: msg.ack || 0,
+        has_media: msg.hasMedia,
+        media_url: mediaUrl,
+        media_type: mediaType
+      });
+    }
+    
+    formattedMessages.sort((a, b) => a.timestamp - b.timestamp);
+    
+    res.json({ messages: formattedMessages });
+    
+  } catch (error) {
+    console.error('❌ Erro messages:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ ENVIAR MENSAGEM DE TEXTO
+app.post('/api/sessions/:sessionId/messages/text', async (req, res) => {
+  const { sessionId } = req.params;
+  const { to, text } = req.body;
+  console.log('📤 POST /api/sessions/' + sessionId + '/messages/text');
+  
+  try {
+    const client = whatsappClients[sessionId];
+    
+    if (!client || client.status !== 'ready') {
+      return res.status(400).json({ error: 'Sessão não conectada' });
+    }
+    
+    const whatsappClient = client.whatsappClient;
+    const chatId = to.includes('@') ? to : to + '@c.us';
+    
+    const sentMsg = await whatsappClient.sendMessage(chatId, text);
+    
+    res.json({ 
+      success: true,
+      message_id: sentMsg.id._serialized,
+      timestamp: sentMsg.timestamp * 1000
+    });
+    
+  } catch (error) {
+    console.error('❌ Erro send:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ✅ INICIALIZAR WHATSAPP CLIENT
+async function initializeWhatsApp(sessionId) {
+  try {
+    if (whatsappClients[sessionId]) {
+      console.log('⚠️ Cliente já existe');
+      return;
+    }
+    
+    console.log('🔄 Init WhatsApp:', sessionId);
+    
+    whatsappClients[sessionId] = {
+      status: 'initializing',
+      currentQR: null,
+      whatsappClient: null
+    };
+    
+    const whatsappClient = new Client({
+      authStrategy: new LocalAuth({ clientId: sessionId }),
       puppeteer: {
         headless: true,
         args: [
@@ -199,131 +323,95 @@ async function initializeWhatsApp() {
       }
     });
     
-    // Evento: QR Code gerado
     whatsappClient.on('qr', async (qr) => {
-      console.log('📱 QR Code gerado!');
-      clientStatus = 'qr_ready';
-      
-      try {
-        currentQR = await qrcode.toDataURL(qr);
-        console.log('✅ QR convertido para base64');
-        
-        broadcastToClients({ type: 'qr', qr: currentQR });
-      } catch (error) {
-        console.error('❌ Erro ao converter QR:', error);
-      }
+      console.log('📱 QR gerado');
+      whatsappClients[sessionId].status = 'qr_ready';
+      whatsappClients[sessionId].currentQR = await qrcode.toDataURL(qr);
+      broadcastToSession(sessionId, { 
+        event: 'qr', 
+        qr: whatsappClients[sessionId].currentQR 
+      });
     });
     
-    // Evento: Autenticado
     whatsappClient.on('authenticated', () => {
-      console.log('✅ WhatsApp autenticado!');
-      clientStatus = 'authenticated';
-      sessionData = { authenticated: true, timestamp: Date.now() };
-      
-      broadcastToClients({ 
-        type: 'authenticated', 
-        session: sessionData 
-      });
+      console.log('✅ Autenticado');
+      whatsappClients[sessionId].status = 'authenticated';
+      broadcastToSession(sessionId, { event: 'authenticated' });
     });
     
-    // Evento: Pronto
-    whatsappClient.on('ready', () => {
-      console.log('✅ WhatsApp pronto!');
-      clientStatus = 'ready';
-      
-      broadcastToClients({ type: 'ready' });
+    whatsappClient.on('ready', async () => {
+      console.log('🎉 READY!');
+      whatsappClients[sessionId].status = 'ready';
+      whatsappClients[sessionId].currentQR = null;
+      broadcastToSession(sessionId, { event: 'session.ready' });
     });
     
-    // Evento: Loading
-    whatsappClient.on('loading_screen', (percent, message) => {
-      console.log(`⏳ Carregando: ${percent}%`);
-      
-      broadcastToClients({ 
-        type: 'loading_screen', 
-        percent, 
-        message 
-      });
-    });
-    
-    // Evento: Desconectado
-    whatsappClient.on('disconnected', (reason) => {
-      console.log(`❌ WhatsApp desconectado: ${reason}`);
-      clientStatus = 'disconnected';
-      currentQR = null;
-      whatsappClient = null;
-      
-      broadcastToClients({ 
-        type: 'disconnected', 
-        reason 
-      });
-    });
-    
-    // Evento: Mensagem recebida
     whatsappClient.on('message', async (message) => {
+      const chatId = message.from;
       console.log('📨 Nova mensagem:', message.from);
-      // Processar mensagem aqui
+      
+      let mediaUrl = null;
+      let mediaType = null;
+      
+      if (message.hasMedia) {
+        try {
+          const media = await message.downloadMedia();
+          if (media) {
+            mediaUrl = 'data:' + media.mimetype + ';base64,' + media.data;
+            mediaType = media.mimetype;
+          }
+        } catch (e) {
+          console.error('⚠️ Erro mídia:', e.message);
+        }
+      }
+      
+      broadcastToSession(sessionId, {
+        event: 'message.in',
+        data: {
+          from: chatId,
+          id: message.id._serialized,
+          text: message.body || '',
+          from_me: message.fromMe,
+          timestamp: message.timestamp * 1000,
+          ack: message.ack || 0,
+          has_media: message.hasMedia,
+          media_url: mediaUrl,
+          media_type: mediaType
+        }
+      });
     });
     
-    // Inicializar
+    whatsappClient.on('message_ack', async (message, ack) => {
+      console.log('✓ ACK:', message.id._serialized.substring(0, 20), '→', ack);
+      
+      broadcastToSession(sessionId, {
+        event: 'message.status',
+        data: {
+          id: message.id._serialized,
+          from: message.from || message.to,
+          ack: ack
+        }
+      });
+    });
+    
+    whatsappClient.on('disconnected', (reason) => {
+      console.log('🔴 Desconectado:', reason);
+      delete whatsappClients[sessionId];
+      broadcastToSession(sessionId, { event: 'disconnected', reason });
+    });
+    
+    whatsappClients[sessionId].whatsappClient = whatsappClient;
     await whatsappClient.initialize();
-    console.log('🔄 Cliente inicializado');
+    console.log('✅ Cliente inicializado');
     
   } catch (error) {
-    console.error('❌ Erro ao inicializar WhatsApp:', error);
-    clientStatus = 'error';
-    currentQR = null;
-    
-    broadcastToClients({ 
-      type: 'error', 
-      message: error.message 
-    });
+    console.error('❌ Erro init:', error);
+    if (whatsappClients[sessionId]) {
+      whatsappClients[sessionId].status = 'error';
+    }
+    broadcastToSession(sessionId, { event: 'error', message: error.message });
   }
 }
 
-// ============================================
-// OAUTH TOKEN EXCHANGE (OUTROS SERVIÇOS)
-// ============================================
-
-app.post('/api/oauth/facebook/token-exchange', async (req, res) => {
-  try {
-    const { code } = req.body;
-    const response = await fetch(
-      'https://graph.facebook.com/v18.0/oauth/access_token',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: process.env.FB_APP_ID,
-          client_secret: process.env.FB_APP_SECRET,
-          redirect_uri: process.env.REDIRECT_URI,
-          code: code
-        })
-      }
-    );
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/oauth/google/token-exchange', async (req, res) => {
-  try {
-    const { code } = req.body;
-    const response = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code,
-        client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: process.env.REDIRECT_URI,
-        grant_type: 'authorization_code',
-      }),
-    });
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+process.on('unhandledRejection', (error) => console.error('Unhandled:', error));
+process.on('uncaughtException', (error) => console.error('Uncaught:', error));
