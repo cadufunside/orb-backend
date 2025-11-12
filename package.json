@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "39.0.0",
-  "description": "Backend Orb CRM v39 - PROTEÇÃO CONTRA RACE CONDITIONS",
+  "version": "40.0.0",
+  "description": "Backend Orb CRM v40 - MENSAGENS EM TEMPO REAL CORRIGIDAS!",
   "main": "server.js",
   "type": "module",
   "engines": {
