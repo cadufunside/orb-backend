@@ -1,4 +1,4 @@
-// ⚡ BACKEND v52 - SIMPLIFICADO E ROBUSTO
+// ⚡ BACKEND v54 - CORREÇÃO DEFINITIVA DO "EXISTS"
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -86,14 +86,20 @@ function broadcast(sessionId, data) {
 app.delete('/api/sessions/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   
+  console.log('🗑️ DELETE session:', sessionId);
+  
   try {
     const client = whatsappClients[sessionId];
     if (client?.whatsappClient) {
+      console.log('Destroying WhatsApp client...');
       await client.whatsappClient.destroy();
+      console.log('✅ WhatsApp client destroyed');
     }
     delete whatsappClients[sessionId];
-    res.json({ success: true });
+    console.log('✅ Session deleted from memory');
+    res.json({ success: true, message: 'Session deleted' });
   } catch (error) {
+    console.error('❌ Delete error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -102,41 +108,45 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
   const { sessionId } = req.params;
   const { force } = req.body;
   
+  console.log('📤 START session:', sessionId, '| force:', force);
+  
   try {
-    if (force && whatsappClients[sessionId]) {
-      if (whatsappClients[sessionId].whatsappClient) {
-        await whatsappClients[sessionId].whatsappClient.destroy();
+    // SEMPRE DELETA PRIMEIRO SE EXISTIR (force ou não)
+    const existingSession = whatsappClients[sessionId];
+    
+    if (existingSession) {
+      console.log('⚠️ Session exists! Deleting...');
+      
+      if (existingSession.whatsappClient) {
+        try {
+          await existingSession.whatsappClient.destroy();
+          console.log('✅ Client destroyed');
+        } catch (e) {
+          console.warn('⚠️ Error destroying:', e.message);
+        }
       }
+      
       delete whatsappClients[sessionId];
-      await new Promise(r => setTimeout(r, 1000));
+      console.log('✅ Session deleted from memory');
+      
+      // Aguarda 3 segundos para limpar completamente
+      await new Promise(r => setTimeout(r, 3000));
     }
     
-    if (whatsappClients[sessionId]?.status !== 'disconnected') {
-      return res.json({ error: 'Exists', status: whatsappClients[sessionId]?.status });
-    }
-    
+    // CRIA NOVA SESSÃO LIMPA
+    console.log('🆕 Creating new session...');
     initWhatsApp(sessionId);
     
-    let attempts = 0;
-    while (attempts < 20) {
-      await new Promise(r => setTimeout(r, 500));
-      
-      if (whatsappClients[sessionId]?.currentQR) {
-        return res.json({ 
-          qr_base64: whatsappClients[sessionId].currentQR,
-          status: 'qr_ready'
-        });
-      }
-      
-      if (whatsappClients[sessionId]?.status === 'ready') {
-        return res.json({ status: 'ready' });
-      }
-      
-      attempts++;
-    }
+    // Retorna imediatamente - não espera QR
+    console.log('✅ Session initialized, returning...');
+    res.json({ 
+      success: true,
+      message: 'Session started. Poll /status for QR code.',
+      session_id: sessionId
+    });
     
-    res.json({ error: 'Timeout' });
   } catch (error) {
+    console.error('❌ Start error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -385,9 +395,21 @@ async function initWhatsApp(sessionId) {
       });
     });
     
-    client.on('disconnected', () => {
-      delete whatsappClients[sessionId];
-      broadcast(sessionId, { event: 'disconnected' });
+    client.on('disconnected', (reason) => {
+      console.log('🔴 Disconnected:', sessionId, '| Reason:', reason);
+      
+      // LIMPA SESSÃO COMPLETAMENTE
+      if (whatsappClients[sessionId]) {
+        if (whatsappClients[sessionId].whatsappClient) {
+          whatsappClients[sessionId].whatsappClient.destroy().catch(e => {
+            console.warn('⚠️ Error destroying on disconnect:', e.message);
+          });
+        }
+        delete whatsappClients[sessionId];
+        console.log('✅ Session cleaned up after disconnect');
+      }
+      
+      broadcast(sessionId, { event: 'disconnected', reason });
     });
     
     whatsappClients[sessionId].whatsappClient = client;
