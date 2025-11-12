@@ -1,4 +1,4 @@
-// ⚡ BACKEND v50 - SISTEMA COMPLETO COM MÍDIA + CRM AUTO-SAVE
+// ⚡ BACKEND v51 - WEBSOCKET FIX COMPLETO!
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -50,7 +50,7 @@ app.get('/api/health', (req, res) => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log('🚀 Backend v50 - SISTEMA COMPLETO');
+  console.log('🚀 Backend v51 - WEBSOCKET FIX!');
 });
 
 let wss;
@@ -62,9 +62,10 @@ try {
     const url = new URL(req.url, 'http://' + req.headers.host);
     const sessionId = url.searchParams.get('sessionId');
     
-    console.log('📱 Client connected:', sessionId);
+    console.log('📱 WS connected:', sessionId);
     
     if (!sessionId) {
+      console.error('❌ No sessionId!');
       ws.close(1008, 'sessionId required');
       return;
     }
@@ -72,21 +73,46 @@ try {
     if (!wsClients[sessionId]) wsClients[sessionId] = new Set();
     wsClients[sessionId].add(ws);
     
+    // 🔥 ENVIA STATUS IMEDIATAMENTE
     const client = whatsappClients[sessionId];
-    ws.send(JSON.stringify({ event: 'status', status: client?.status || 'disconnected' }));
+    const status = client?.status || 'disconnected';
+    console.log('📤 Sending status to client:', status);
     
+    ws.send(JSON.stringify({ 
+      event: 'status', 
+      status: status 
+    }));
+    
+    // 🔥 SE TIVER QR, ENVIA
     if (client?.currentQR && client?.status === 'qr_ready') {
+      console.log('📤 Sending QR to client');
       ws.send(JSON.stringify({ event: 'qr', qr: client.currentQR }));
-    } else if (client?.status === 'ready') {
+    } 
+    // 🔥 SE READY, ENVIA EVENTO
+    else if (client?.status === 'ready') {
+      console.log('📤 Sending session.ready to client');
       ws.send(JSON.stringify({ event: 'session.ready' }));
     }
     
+    // 🔥 KEEP-ALIVE PING
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === 1) {
+        ws.send(JSON.stringify({ event: 'ping' }));
+      }
+    }, 30000); // 30s
+    
     ws.on('close', () => {
-      console.log('🔌 Client disconnected:', sessionId);
+      console.log('🔌 WS disconnected:', sessionId);
+      clearInterval(pingInterval);
       if (wsClients[sessionId]) {
         wsClients[sessionId].delete(ws);
         if (wsClients[sessionId].size === 0) delete wsClients[sessionId];
       }
+    });
+    
+    ws.on('error', (error) => {
+      console.error('❌ WS error:', sessionId, error.message);
+      clearInterval(pingInterval);
     });
   });
 } catch (error) {
@@ -99,7 +125,13 @@ function broadcastToSession(sessionId, data) {
   if (clients) {
     console.log(`📡 Broadcasting [${data.event}] to ${clients.size} clients`);
     clients.forEach(client => {
-      if (client.readyState === 1) client.send(message);
+      if (client.readyState === 1) {
+        try {
+          client.send(message);
+        } catch (error) {
+          console.error('❌ Send error:', error.message);
+        }
+      }
     });
   }
 }
@@ -201,6 +233,7 @@ app.get('/api/sessions/:sessionId/threads', async (req, res) => {
   try {
     const client = whatsappClients[sessionId];
     if (!client || client.status !== 'ready') {
+      console.error('❌ Session not ready:', sessionId, client?.status);
       return res.status(400).json({ error: 'Not connected' });
     }
     
@@ -294,7 +327,6 @@ app.get('/api/sessions/:sessionId/messages/:jid/history', async (req, res) => {
   }
 });
 
-// 🔥 ENVIAR TEXTO
 app.post('/api/sessions/:sessionId/messages/text', async (req, res) => {
   const { sessionId } = req.params;
   const { to, text } = req.body;
@@ -332,7 +364,6 @@ app.post('/api/sessions/:sessionId/messages/text', async (req, res) => {
   }
 });
 
-// 🔥 ENVIAR MÍDIA (NOVO!)
 app.post('/api/sessions/:sessionId/messages/media', async (req, res) => {
   const { sessionId } = req.params;
   const { to, caption, mediaData, mimetype, filename } = req.body;
@@ -422,7 +453,6 @@ async function initializeWhatsApp(sessionId) {
       broadcastToSession(sessionId, { event: 'session.ready' });
     });
     
-    // 🔥 MENSAGEM RECEBIDA
     whatsappClient.on('message', async (message) => {
       const chatId = message.from;
       console.log('📩 Message from:', chatId);
@@ -455,12 +485,11 @@ async function initializeWhatsApp(sessionId) {
           media_url: mediaUrl,
           media_type: mediaType,
           contact_name: message._data?.notifyName || '',
-          is_new: true // 🔥 MARCA COMO NOVA
+          is_new: true
         }
       });
     });
     
-    // 🔥 STATUS DE MENSAGEM
     whatsappClient.on('message_ack', async (message, ack) => {
       broadcastToSession(sessionId, {
         event: 'message.status',
