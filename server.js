@@ -1,4 +1,4 @@
-// ⚡ BACKEND v38 - IMPORT CORRIGIDO + QR COM LOGO
+// ⚡ BACKEND v39 - PROTEÇÃO CONTRA RACE CONDITIONS
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -15,10 +15,28 @@ app.use(express.json());
 let whatsappClients = {};
 let wsClients = {};
 
+// ✅ HELPER PARA GARANTIR QUE O CLIENTE EXISTE
+function ensureClientExists(sessionId) {
+  if (!whatsappClients[sessionId]) {
+    whatsappClients[sessionId] = {
+      status: 'disconnected',
+      currentQR: null,
+      whatsappClient: null
+    };
+  }
+  return whatsappClients[sessionId];
+}
+
+// ✅ HELPER PARA ATUALIZAR STATUS COM SEGURANÇA
+function updateClientStatus(sessionId, status) {
+  const client = ensureClientExists(sessionId);
+  client.status = status;
+  console.log(`📊 Status [${sessionId}]: ${status}`);
+}
+
 // ✅ FUNÇÃO PARA ADICIONAR LOGO AO QR CODE
 async function generateQRWithLogo(qrText) {
   try {
-    // Gera QR code com alta correção de erro (permite logo no centro)
     const qrDataUrl = await qrcode.toDataURL(qrText, {
       errorCorrectionLevel: 'H',
       margin: 1,
@@ -28,7 +46,6 @@ async function generateQRWithLogo(qrText) {
         light: '#FFFFFF'
       }
     });
-    
     return qrDataUrl;
   } catch (error) {
     console.error('❌ Erro ao gerar QR:', error);
@@ -46,8 +63,8 @@ app.get('/api/health', (req, res) => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log('🚀 Backend v38 rodando na porta', PORT);
-  console.log('✅ Pronto para conexões WhatsApp');
+  console.log('🚀 Backend v39 rodando na porta', PORT);
+  console.log('✅ Proteção contra race conditions ativa');
 });
 
 // ✅ WEBSOCKET SERVER
@@ -353,22 +370,20 @@ app.post('/api/sessions/:sessionId/messages/text', async (req, res) => {
   }
 });
 
-// ✅ INICIALIZAR WHATSAPP CLIENT
+// ✅ INICIALIZAR WHATSAPP CLIENT - VERSÃO COM PROTEÇÃO
 async function initializeWhatsApp(sessionId) {
   try {
-    if (whatsappClients[sessionId]) {
-      console.log('⚠️ Cliente já existe');
+    if (whatsappClients[sessionId] && whatsappClients[sessionId].whatsappClient) {
+      console.log('⚠️ Cliente já existe e está sendo inicializado/já inicializado:', sessionId);
       return;
     }
     
     console.log('🔄 Init WhatsApp:', sessionId);
     
-    whatsappClients[sessionId] = {
-      status: 'initializing',
-      currentQR: null,
-      whatsappClient: null
-    };
-    
+    // Garante que o objeto whatsappClients[sessionId] existe antes de usá-lo
+    const clientState = ensureClientExists(sessionId);
+    clientState.status = 'initializing';
+
     const whatsappClient = new Client({
       authStrategy: new LocalAuth({ clientId: sessionId }),
       puppeteer: {
@@ -387,24 +402,26 @@ async function initializeWhatsApp(sessionId) {
     
     whatsappClient.on('qr', async (qr) => {
       console.log('📱 QR gerado');
-      whatsappClients[sessionId].status = 'qr_ready';
-      whatsappClients[sessionId].currentQR = await generateQRWithLogo(qr);
+      const client = ensureClientExists(sessionId); // Garante que o objeto ainda existe
+      client.status = 'qr_ready';
+      client.currentQR = await generateQRWithLogo(qr);
       broadcastToSession(sessionId, { 
         event: 'qr', 
-        qr: whatsappClients[sessionId].currentQR 
+        qr: client.currentQR 
       });
     });
     
     whatsappClient.on('authenticated', () => {
       console.log('✅ Autenticado');
-      whatsappClients[sessionId].status = 'authenticated';
+      updateClientStatus(sessionId, 'authenticated'); // Usa o helper seguro
       broadcastToSession(sessionId, { event: 'authenticated' });
     });
     
     whatsappClient.on('ready', async () => {
       console.log('🎉 READY!');
-      whatsappClients[sessionId].status = 'ready';
-      whatsappClients[sessionId].currentQR = null;
+      const client = ensureClientExists(sessionId); // Garante que o objeto ainda existe
+      client.status = 'ready';
+      client.currentQR = null;
       broadcastToSession(sessionId, { event: 'session.ready' });
     });
     
@@ -455,11 +472,13 @@ async function initializeWhatsApp(sessionId) {
     
     whatsappClient.on('disconnected', (reason) => {
       console.log('🔴 Desconectado:', reason);
-      delete whatsappClients[sessionId];
+      if (whatsappClients[sessionId]) { // Adiciona verificação antes de deletar
+        delete whatsappClients[sessionId];
+      }
       broadcastToSession(sessionId, { event: 'disconnected', reason });
     });
     
-    whatsappClients[sessionId].whatsappClient = whatsappClient;
+    ensureClientExists(sessionId).whatsappClient = whatsappClient; // Garante que o objeto existe antes de atribuir
     await whatsappClient.initialize();
     console.log('✅ Cliente inicializado');
     
