@@ -1,7 +1,13 @@
 {
   "name": "orb-backend",
-  "version": "1.0.0",
+  "version": "34.0.0",
+  "description": "Backend Orb CRM v34 - IMPORT CORRIGIDO",
+  "main": "server.js",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
