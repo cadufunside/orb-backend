@@ -1,4 +1,4 @@
-// ⚡ BACKEND v39 - PROTEÇÃO CONTRA RACE CONDITIONS
+// ⚡ BACKEND v40 - MENSAGENS EM TEMPO REAL CORRIGIDAS!
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -15,7 +15,6 @@ app.use(express.json());
 let whatsappClients = {};
 let wsClients = {};
 
-// ✅ HELPER PARA GARANTIR QUE O CLIENTE EXISTE
 function ensureClientExists(sessionId) {
   if (!whatsappClients[sessionId]) {
     whatsappClients[sessionId] = {
@@ -27,24 +26,19 @@ function ensureClientExists(sessionId) {
   return whatsappClients[sessionId];
 }
 
-// ✅ HELPER PARA ATUALIZAR STATUS COM SEGURANÇA
 function updateClientStatus(sessionId, status) {
   const client = ensureClientExists(sessionId);
   client.status = status;
   console.log(`📊 Status [${sessionId}]: ${status}`);
 }
 
-// ✅ FUNÇÃO PARA ADICIONAR LOGO AO QR CODE
 async function generateQRWithLogo(qrText) {
   try {
     const qrDataUrl = await qrcode.toDataURL(qrText, {
       errorCorrectionLevel: 'H',
       margin: 1,
       width: 400,
-      color: {
-        dark: '#000000',
-        light: '#FFFFFF'
-      }
+      color: { dark: '#000000', light: '#FFFFFF' }
     });
     return qrDataUrl;
   } catch (error) {
@@ -53,7 +47,6 @@ async function generateQRWithLogo(qrText) {
   }
 }
 
-// ✅ HEALTH CHECK
 app.get('/api/health', (req, res) => {
   const sessionStatuses = {};
   Object.keys(whatsappClients).forEach(sessionId => {
@@ -63,11 +56,10 @@ app.get('/api/health', (req, res) => {
 });
 
 const server = app.listen(PORT, () => {
-  console.log('🚀 Backend v39 rodando na porta', PORT);
-  console.log('✅ Proteção contra race conditions ativa');
+  console.log('🚀 Backend v40 rodando na porta', PORT);
+  console.log('✅ Mensagens em tempo real CORRIGIDAS!');
 });
 
-// ✅ WEBSOCKET SERVER
 let wss;
 try {
   wss = new WebSocketServer({ server, path: '/api/whatsapp' });
@@ -116,6 +108,7 @@ function broadcastToSession(sessionId, data) {
   const message = JSON.stringify(data);
   const clients = wsClients[sessionId];
   if (clients) {
+    console.log(`📡 Broadcasting [${data.event}] para ${clients.size} clients`);
     clients.forEach(client => {
       if (client.readyState === 1) {
         client.send(message);
@@ -124,7 +117,6 @@ function broadcastToSession(sessionId, data) {
   }
 }
 
-// ✅ DESTRUIR SESSÃO
 app.delete('/api/sessions/:sessionId', async (req, res) => {
   const { sessionId } = req.params;
   console.log('🗑️ DELETE /api/sessions/' + sessionId);
@@ -156,7 +148,6 @@ app.delete('/api/sessions/:sessionId', async (req, res) => {
   }
 });
 
-// ✅ INICIAR SESSÃO (com force)
 app.post('/api/sessions/:sessionId/start', async (req, res) => {
   const { sessionId } = req.params;
   const { force } = req.body;
@@ -215,7 +206,6 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
   }
 });
 
-// ✅ STATUS DA SESSÃO
 app.get('/api/sessions/:sessionId/status', (req, res) => {
   const { sessionId } = req.params;
   const client = whatsappClients[sessionId];
@@ -231,7 +221,6 @@ app.get('/api/sessions/:sessionId/status', (req, res) => {
   });
 });
 
-// ✅ BUSCAR CONVERSAS (THREADS)
 app.get('/api/sessions/:sessionId/threads', async (req, res) => {
   const { sessionId } = req.params;
   const limit = parseInt(req.query.limit) || 50;
@@ -281,7 +270,6 @@ app.get('/api/sessions/:sessionId/threads', async (req, res) => {
   }
 });
 
-// ✅ BUSCAR HISTÓRICO DE MENSAGENS
 app.get('/api/sessions/:sessionId/messages/:jid/history', async (req, res) => {
   const { sessionId, jid } = req.params;
   const limit = parseInt(req.query.limit) || 50;
@@ -341,7 +329,6 @@ app.get('/api/sessions/:sessionId/messages/:jid/history', async (req, res) => {
   }
 });
 
-// ✅ ENVIAR MENSAGEM DE TEXTO
 app.post('/api/sessions/:sessionId/messages/text', async (req, res) => {
   const { sessionId } = req.params;
   const { to, text } = req.body;
@@ -358,6 +345,19 @@ app.post('/api/sessions/:sessionId/messages/text', async (req, res) => {
     
     const sentMsg = await whatsappClient.sendMessage(chatId, text);
     
+    // 🔥 ENVIA VIA WEBSOCKET IMEDIATAMENTE
+    broadcastToSession(sessionId, {
+      event: 'message.out',
+      data: {
+        id: sentMsg.id._serialized,
+        to: chatId,
+        from: chatId, // Importante para o frontend identificar o chat
+        text: text,
+        timestamp: sentMsg.timestamp * 1000,
+        ack: sentMsg.ack || 1
+      }
+    });
+    
     res.json({ 
       success: true,
       message_id: sentMsg.id._serialized,
@@ -370,17 +370,15 @@ app.post('/api/sessions/:sessionId/messages/text', async (req, res) => {
   }
 });
 
-// ✅ INICIALIZAR WHATSAPP CLIENT - VERSÃO COM PROTEÇÃO
 async function initializeWhatsApp(sessionId) {
   try {
     if (whatsappClients[sessionId] && whatsappClients[sessionId].whatsappClient) {
-      console.log('⚠️ Cliente já existe e está sendo inicializado/já inicializado:', sessionId);
+      console.log('⚠️ Cliente já existe:', sessionId);
       return;
     }
     
     console.log('🔄 Init WhatsApp:', sessionId);
     
-    // Garante que o objeto whatsappClients[sessionId] existe antes de usá-lo
     const clientState = ensureClientExists(sessionId);
     clientState.status = 'initializing';
 
@@ -402,7 +400,7 @@ async function initializeWhatsApp(sessionId) {
     
     whatsappClient.on('qr', async (qr) => {
       console.log('📱 QR gerado');
-      const client = ensureClientExists(sessionId); // Garante que o objeto ainda existe
+      const client = ensureClientExists(sessionId);
       client.status = 'qr_ready';
       client.currentQR = await generateQRWithLogo(qr);
       broadcastToSession(sessionId, { 
@@ -413,20 +411,23 @@ async function initializeWhatsApp(sessionId) {
     
     whatsappClient.on('authenticated', () => {
       console.log('✅ Autenticado');
-      updateClientStatus(sessionId, 'authenticated'); // Usa o helper seguro
+      updateClientStatus(sessionId, 'authenticated');
       broadcastToSession(sessionId, { event: 'authenticated' });
     });
     
     whatsappClient.on('ready', async () => {
       console.log('🎉 READY!');
-      const client = ensureClientExists(sessionId); // Garante que o objeto ainda existe
+      const client = ensureClientExists(sessionId);
       client.status = 'ready';
       client.currentQR = null;
       broadcastToSession(sessionId, { event: 'session.ready' });
     });
     
+    // 🔥 EVENTO DE MENSAGEM RECEBIDA - ENVIA VIA WS
     whatsappClient.on('message', async (message) => {
       const chatId = message.from;
+      
+      console.log('📩 Mensagem recebida de:', chatId);
       
       let mediaUrl = null;
       let mediaType = null;
@@ -443,6 +444,7 @@ async function initializeWhatsApp(sessionId) {
         }
       }
       
+      // 🔥 BROADCAST PARA FRONTEND
       broadcastToSession(sessionId, {
         event: 'message.in',
         data: {
@@ -459,6 +461,7 @@ async function initializeWhatsApp(sessionId) {
       });
     });
     
+    // 🔥 EVENTO DE STATUS DE MENSAGEM (checks)
     whatsappClient.on('message_ack', async (message, ack) => {
       broadcastToSession(sessionId, {
         event: 'message.status',
@@ -472,13 +475,13 @@ async function initializeWhatsApp(sessionId) {
     
     whatsappClient.on('disconnected', (reason) => {
       console.log('🔴 Desconectado:', reason);
-      if (whatsappClients[sessionId]) { // Adiciona verificação antes de deletar
+      if (whatsappClients[sessionId]) {
         delete whatsappClients[sessionId];
       }
       broadcastToSession(sessionId, { event: 'disconnected', reason });
     });
     
-    ensureClientExists(sessionId).whatsappClient = whatsappClient; // Garante que o objeto existe antes de atribuir
+    ensureClientExists(sessionId).whatsappClient = whatsappClient;
     await whatsappClient.initialize();
     console.log('✅ Cliente inicializado');
     
