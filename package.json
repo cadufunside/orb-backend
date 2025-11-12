@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "38.0.0",
-  "description": "Backend Orb CRM v38 - IMPORT CORRIGIDO + QR COM LOGO",
+  "version": "39.0.0",
+  "description": "Backend Orb CRM v39 - PROTEÇÃO CONTRA RACE CONDITIONS",
   "main": "server.js",
   "type": "module",
   "engines": {
