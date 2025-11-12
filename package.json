@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "55.0.0",
-  "description": "Backend v55 - Logs Extremos para Debug",
+  "version": "60.0.0",
+  "description": "Backend v60 - Ultra Performance com Cache e Compressão",
   "main": "server.js",
   "type": "module",
   "engines": {
@@ -14,6 +14,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
+    "compression": "^1.7.4",
     "whatsapp-web.js": "^1.23.0",
     "qrcode": "^1.5.3",
     "ws": "^8.14.2"
