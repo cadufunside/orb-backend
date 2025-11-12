@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "40.0.0",
-  "description": "Backend Orb CRM v40 - MENSAGENS EM TEMPO REAL CORRIGIDAS!",
+  "version": "50.0.0",
+  "description": "Backend v50 - SISTEMA COMPLETO com mídia + CRM auto-save",
   "main": "server.js",
   "type": "module",
   "engines": {
