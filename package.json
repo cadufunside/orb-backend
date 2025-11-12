@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "35.0.0",
-  "description": "Backend Orb CRM v35 - DOCKERFILE CORRIGIDO",
+  "version": "38.0.0",
+  "description": "Backend Orb CRM v38 - IMPORT CORRIGIDO + QR COM LOGO",
   "main": "server.js",
   "type": "module",
   "engines": {
