@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "52.0.0",
-  "description": "Backend v52 - Simplificado e Robusto",
+  "version": "53.0.0",
+  "description": "Backend v53 - Gestão Inteligente de Sessões",
   "main": "server.js",
   "type": "module",
   "engines": {
