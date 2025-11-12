@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "50.0.0",
-  "description": "Backend v50 - SISTEMA COMPLETO com mídia + CRM auto-save",
+  "version": "51.0.0",
+  "description": "Backend v51 - WEBSOCKET FIX COMPLETO",
   "main": "server.js",
   "type": "module",
   "engines": {
