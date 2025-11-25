@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "60.0.0",
-  "description": "Backend v60 - Ultra Performance com Cache e Compressão",
+  "version": "61.0.0",
+  "description": "Backend v61 - Ultra Performance + Presença em Tempo Real",
   "main": "server.js",
   "type": "module",
   "engines": {
