@@ -1,4 +1,4 @@
-// ⚡ BACKEND v66 - RAILWAY FIX + MEDIA + REALTIME
+// ⚡ BACKEND v67 - SINGLETON FIX + RAILWAY STABLE
 const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
@@ -19,8 +19,27 @@ const messageCache = new Map();
 const profilePicCache = new Map();
 
 console.log('========================================');
-console.log('🚀 BACKEND v66 - RAILWAY STABLE');
+console.log('🚀 BACKEND v67 - SINGLETON FIX');
 console.log('========================================');
+
+// Clean up stale lock files on startup
+function cleanupLockFiles(sessionId) {
+  const sessionPath = path.join('.wwebjs_auth', `session-${sessionId}`);
+  const lockFile = path.join(sessionPath, 'SingletonLock');
+  const socketFile = path.join(sessionPath, 'SingletonSocket');
+  const cookieFile = path.join(sessionPath, 'SingletonCookie');
+  
+  [lockFile, socketFile, cookieFile].forEach(file => {
+    try {
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+        console.log(`Removed lock file: ${file}`);
+      }
+    } catch (e) {
+      console.log(`Could not remove ${file}:`, e.message);
+    }
+  });
+}
 
 // Get or create session
 function getSession(sessionId) {
@@ -37,9 +56,12 @@ function getSession(sessionId) {
   return sessions.get(sessionId);
 }
 
-// Health check
+// Health check - BOTH /health and /api/health
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '66', sessions: sessions.size });
+  res.json({ status: 'ok', version: '67', sessions: sessions.size });
+});
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', version: '67', sessions: sessions.size });
 });
 
 // Force restart session (cleanup and reinit)
@@ -56,6 +78,9 @@ app.post('/api/sessions/:sessionId/restart', async (req, res) => {
   }
   
   sessions.delete(sessionId);
+  
+  // Clean up lock files
+  cleanupLockFiles(sessionId);
   
   // Clear caches
   for (const key of messageCache.keys()) {
@@ -88,6 +113,9 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
     } catch (e) {}
     session.client = null;
   }
+  
+  // CRITICAL: Clean up lock files before starting
+  cleanupLockFiles(sessionId);
 
   try {
     session.status = 'initializing';
@@ -102,7 +130,7 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
       }),
       puppeteer: {
         headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -116,7 +144,8 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
           '--disable-software-rasterizer',
           '--disable-features=site-per-process',
           '--ignore-certificate-errors',
-          '--ignore-ssl-errors'
+          '--ignore-ssl-errors',
+          '--user-data-dir=/tmp/chromium-${sessionId}'
         ],
         timeout: 120000,
         protocolTimeout: 120000
@@ -190,12 +219,15 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
           await client.destroy();
         } catch (e) {}
         session.client = null;
+        // Clean up locks on failure too
+        cleanupLockFiles(sessionId);
       });
 
     res.json({ success: true, status: 'initializing' });
   } catch (error) {
     console.error(`[${sessionId}] Start error:`, error);
     session.status = 'error';
+    cleanupLockFiles(sessionId);
     res.status(500).json({ error: error.message });
   }
 });
