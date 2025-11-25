@@ -1,4 +1,4 @@
-// ⚡ BACKEND v65 - MEDIA + PROFILE PICS + REALTIME ACK
+// ⚡ BACKEND v66 - RAILWAY FIX + MEDIA + REALTIME
 const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
@@ -19,7 +19,7 @@ const messageCache = new Map();
 const profilePicCache = new Map();
 
 console.log('========================================');
-console.log('🚀 BACKEND v65 - MEDIA + REALTIME ACK');
+console.log('🚀 BACKEND v66 - RAILWAY STABLE');
 console.log('========================================');
 
 // Get or create session
@@ -30,7 +30,8 @@ function getSession(sessionId) {
       qr: null,
       ready: false,
       status: 'disconnected',
-      info: null
+      info: null,
+      retries: 0
     });
   }
   return sessions.get(sessionId);
@@ -38,10 +39,36 @@ function getSession(sessionId) {
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '65', sessions: sessions.size });
+  res.json({ status: 'ok', version: '66', sessions: sessions.size });
 });
 
-// Start session
+// Force restart session (cleanup and reinit)
+app.post('/api/sessions/:sessionId/restart', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  
+  console.log(`[${sessionId}] Force restart requested`);
+  
+  if (session?.client) {
+    try {
+      await session.client.destroy();
+    } catch (e) {}
+  }
+  
+  sessions.delete(sessionId);
+  
+  // Clear caches
+  for (const key of messageCache.keys()) {
+    if (key.startsWith(sessionId)) messageCache.delete(key);
+  }
+  for (const key of profilePicCache.keys()) {
+    if (key.startsWith(sessionId)) profilePicCache.delete(key);
+  }
+  
+  res.json({ success: true, message: 'Session cleared, call /start to reconnect' });
+});
+
+// Start session with retry logic
 app.post('/api/sessions/:sessionId/start', async (req, res) => {
   const { sessionId } = req.params;
   const session = getSession(sessionId);
@@ -50,17 +77,32 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
     return res.json({ success: true, status: 'ready' });
   }
 
-  if (session.client) {
+  if (session.client && session.status === 'initializing') {
     return res.json({ success: true, status: session.status });
+  }
+
+  // Cleanup any existing broken client
+  if (session.client) {
+    try {
+      await session.client.destroy();
+    } catch (e) {}
+    session.client = null;
   }
 
   try {
     session.status = 'initializing';
+    session.retries = (session.retries || 0) + 1;
+    
+    console.log(`[${sessionId}] Starting client (attempt ${session.retries})...`);
     
     const client = new Client({
-      authStrategy: new LocalAuth({ clientId: sessionId }),
+      authStrategy: new LocalAuth({ 
+        clientId: sessionId,
+        dataPath: './.wwebjs_auth'
+      }),
       puppeteer: {
         headless: true,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -69,9 +111,19 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
           '--no-first-run',
           '--no-zygote',
           '--disable-gpu',
-          '--single-process'
-        ]
-      }
+          '--single-process',
+          '--disable-extensions',
+          '--disable-software-rasterizer',
+          '--disable-features=site-per-process',
+          '--ignore-certificate-errors',
+          '--ignore-ssl-errors'
+        ],
+        timeout: 120000,
+        protocolTimeout: 120000
+      },
+      qrMaxRetries: 5,
+      takeoverOnConflict: true,
+      takeoverTimeoutMs: 10000
     });
 
     client.on('qr', async (qr) => {
@@ -119,11 +171,31 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
     });
 
     session.client = client;
-    await client.initialize();
+    
+    // Initialize with timeout and error handling
+    const initPromise = client.initialize();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Initialization timeout')), 90000)
+    );
+
+    Promise.race([initPromise, timeoutPromise])
+      .then(() => {
+        console.log(`[${sessionId}] Initialize completed`);
+      })
+      .catch(async (err) => {
+        console.error(`[${sessionId}] Initialize failed:`, err.message);
+        session.status = 'error';
+        session.ready = false;
+        try {
+          await client.destroy();
+        } catch (e) {}
+        session.client = null;
+      });
 
     res.json({ success: true, status: 'initializing' });
   } catch (error) {
     console.error(`[${sessionId}] Start error:`, error);
+    session.status = 'error';
     res.status(500).json({ error: error.message });
   }
 });
