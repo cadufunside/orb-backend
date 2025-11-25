@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "61.0.0",
-  "description": "Backend v61 - Ultra Performance + Presença em Tempo Real",
+  "version": "63.0.0",
+  "description": "Backend v63 - QR Code Fix + Ultra Performance",
   "main": "server.js",
   "type": "module",
   "engines": {
