@@ -1,4 +1,4 @@
-// ⚡ BACKEND v60 - ULTRA PERFORMANCE!
+// ⚡ BACKEND v61 - ULTRA PERFORMANCE + PRESENÇA!
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -47,7 +47,7 @@ app.get('/api/health', (req, res) => {
 
 const server = app.listen(PORT, () => {
   console.log('========================================');
-  console.log('🚀 BACKEND v60 - ULTRA PERFORMANCE');
+  console.log('🚀 BACKEND v61 - ULTRA PERFORMANCE + PRESENÇA');
   console.log('========================================');
   console.log('⚡ Port:', PORT);
   console.log('⚡ Time:', new Date().toISOString());
@@ -457,6 +457,33 @@ async function initWhatsApp(sessionId) {
         }
       });
     });
+    
+    // ⚡ PRESENCE: Atualização de status online/offline
+    client.on('change_state', (state) => {
+      console.log('🔄 State:', state);
+    });
+    
+    // Monitora presença de contatos
+    setInterval(async () => {
+      try {
+        const chats = await client.getChats();
+        for (const chat of chats.slice(0, 20)) {
+          if (!chat.isGroup) {
+            const contact = await chat.getContact();
+            if (contact) {
+              broadcast(sessionId, {
+                event: 'presence.update',
+                data: {
+                  jid: chat.id._serialized,
+                  isOnline: contact.isOnline || false,
+                  lastSeen: contact.lastSeen || null
+                }
+              });
+            }
+          }
+        }
+      } catch (e) {}
+    }, 30000); // A cada 30 segundos
     
     client.on('disconnected', (reason) => {
       console.log('🔴 Disconnected:', sessionId, reason);
