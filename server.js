@@ -1,4 +1,4 @@
-// ⚡ BACKEND v67 - SINGLETON FIX + RAILWAY STABLE
+// ⚡ BACKEND v68 - SESSION RECOVERY + STABLE
 const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
@@ -19,7 +19,7 @@ const messageCache = new Map();
 const profilePicCache = new Map();
 
 console.log('========================================');
-console.log('🚀 BACKEND v67 - SINGLETON FIX');
+console.log('🚀 BACKEND v68 - SESSION RECOVERY');
 console.log('========================================');
 
 // Clean up stale lock files on startup
@@ -41,6 +41,26 @@ function cleanupLockFiles(sessionId) {
   });
 }
 
+// Check if client is actually usable
+function isClientUsable(session) {
+  if (!session || !session.client || !session.ready) return false;
+  try {
+    // Check if pupPage exists and is not closed
+    if (!session.client.pupPage || session.client.pupPage.isClosed()) {
+      console.log('Client page is closed, marking as not usable');
+      session.ready = false;
+      session.status = 'disconnected';
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.log('Client check error:', e.message);
+    session.ready = false;
+    session.status = 'disconnected';
+    return false;
+  }
+}
+
 // Get or create session
 function getSession(sessionId) {
   if (!sessions.has(sessionId)) {
@@ -58,10 +78,10 @@ function getSession(sessionId) {
 
 // Health check - BOTH /health and /api/health
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '67', sessions: sessions.size });
+  res.json({ status: 'ok', version: '68', sessions: sessions.size });
 });
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '67', sessions: sessions.size });
+  res.json({ status: 'ok', version: '68', sessions: sessions.size });
 });
 
 // Force restart session (cleanup and reinit)
@@ -237,6 +257,12 @@ app.get('/api/sessions/:sessionId/status', (req, res) => {
   const { sessionId } = req.params;
   const session = getSession(sessionId);
   
+  // Verify client is still usable before reporting ready
+  if (session.ready && !isClientUsable(session)) {
+    session.ready = false;
+    session.status = 'disconnected';
+  }
+  
   res.json({
     status: session.status,
     ready: session.ready,
@@ -326,7 +352,12 @@ app.get('/api/sessions/:sessionId/threads', async (req, res) => {
   const session = sessions.get(sessionId);
 
   if (!session?.ready) {
-    return res.status(400).json({ error: 'Session not ready' });
+    return res.status(400).json({ error: 'Session not ready', status: session?.status || 'unknown' });
+  }
+
+  // Check if client is still usable
+  if (!isClientUsable(session)) {
+    return res.status(400).json({ error: 'Session disconnected, please reconnect', status: 'disconnected' });
   }
 
   try {
@@ -356,6 +387,12 @@ app.get('/api/sessions/:sessionId/threads', async (req, res) => {
     res.json({ threads });
   } catch (error) {
     console.error('Get threads error:', error);
+    // Mark session as disconnected on critical errors
+    if (error.message?.includes('Session closed') || error.message?.includes('page has been closed')) {
+      session.ready = false;
+      session.status = 'disconnected';
+      return res.status(400).json({ error: 'Session disconnected, please reconnect', status: 'disconnected' });
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -367,7 +404,11 @@ app.get('/api/sessions/:sessionId/messages/:chatId/history', async (req, res) =>
   const session = sessions.get(sessionId);
 
   if (!session?.ready) {
-    return res.status(400).json({ error: 'Session not ready' });
+    return res.status(400).json({ error: 'Session not ready', status: session?.status || 'unknown' });
+  }
+
+  if (!isClientUsable(session)) {
+    return res.status(400).json({ error: 'Session disconnected', status: 'disconnected' });
   }
 
   try {
