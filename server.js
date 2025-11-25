@@ -1,4 +1,4 @@
-// ⚡ BACKEND v68 - SESSION RECOVERY + STABLE
+// ⚡ BACKEND v69 - SINGLETONLOCK FIX
 const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
@@ -19,11 +19,12 @@ const messageCache = new Map();
 const profilePicCache = new Map();
 
 console.log('========================================');
-console.log('🚀 BACKEND v68 - SESSION RECOVERY');
+console.log('🚀 BACKEND v69 - SINGLETONLOCK FIX');
 console.log('========================================');
 
-// Clean up stale lock files on startup
+// Clean up ALL stale lock files on startup
 function cleanupLockFiles(sessionId) {
+  // Clean wwebjs auth folder
   const sessionPath = path.join('.wwebjs_auth', `session-${sessionId}`);
   const lockFile = path.join(sessionPath, 'SingletonLock');
   const socketFile = path.join(sessionPath, 'SingletonSocket');
@@ -39,6 +40,25 @@ function cleanupLockFiles(sessionId) {
       console.log(`Could not remove ${file}:`, e.message);
     }
   });
+
+  // Clean /tmp chromium folders
+  const tmpDir = '/tmp';
+  try {
+    const files = fs.readdirSync(tmpDir);
+    files.forEach(file => {
+      if (file.startsWith('chromium-') || file.startsWith('puppeteer_')) {
+        const fullPath = path.join(tmpDir, file);
+        try {
+          fs.rmSync(fullPath, { recursive: true, force: true });
+          console.log(`Cleaned tmp folder: ${fullPath}`);
+        } catch (e) {
+          console.log(`Could not clean ${fullPath}:`, e.message);
+        }
+      }
+    });
+  } catch (e) {
+    console.log('Could not read /tmp:', e.message);
+  }
 }
 
 // Check if client is actually usable
@@ -78,10 +98,10 @@ function getSession(sessionId) {
 
 // Health check - BOTH /health and /api/health
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', version: '68', sessions: sessions.size });
+  res.json({ status: 'ok', version: '69', sessions: sessions.size });
 });
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', version: '68', sessions: sessions.size });
+  res.json({ status: 'ok', version: '69', sessions: sessions.size });
 });
 
 // Force restart session (cleanup and reinit)
@@ -164,8 +184,7 @@ app.post('/api/sessions/:sessionId/start', async (req, res) => {
           '--disable-software-rasterizer',
           '--disable-features=site-per-process',
           '--ignore-certificate-errors',
-          '--ignore-ssl-errors',
-          '--user-data-dir=/tmp/chromium-${sessionId}'
+          '--ignore-ssl-errors'
         ],
         timeout: 120000,
         protocolTimeout: 120000
