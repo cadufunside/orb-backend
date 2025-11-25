@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "68.0.0",
-  "description": "Backend v68 - Session Recovery + Stable",
+  "version": "69.0.0",
+  "description": "Backend v69 - Fixed SingletonLock /tmp cleanup",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
