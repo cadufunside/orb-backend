@@ -1,7 +1,7 @@
 {
   "name": "orb-backend",
-  "version": "69.0.0",
-  "description": "Backend v69 - Fixed SingletonLock /tmp cleanup",
+  "version": "70.0.0",
+  "description": "Backend v70 - Stable Chromium for Railway",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
