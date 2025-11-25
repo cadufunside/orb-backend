@@ -1,388 +1,62 @@
-// ⚡ BACKEND v63 - QR CODE FIX + ULTRA PERFORMANCE!
-import express from 'express';
-import cors from 'cors';
-import pkg from 'whatsapp-web.js';
-const { Client, LocalAuth, MessageMedia } = pkg;
-import qrcode from 'qrcode';
-import { WebSocketServer } from 'ws';
-import compression from 'compression';
+// ⚡ BACKEND v65 - MEDIA + PROFILE PICS + REALTIME ACK
+const express = require('express');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const qrcode = require('qrcode');
+const cors = require('cors');
+const compression = require('compression');
+const path = require('path');
+const fs = require('fs');
+const fetch = require('node-fetch');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// ⚡ PERFORMANCE: Compressão GZIP
+app.use(cors({ origin: '*' }));
 app.use(compression());
+app.use(express.json({ limit: '50mb' }));
 
-// ⚡ PERFORMANCE: CORS otimizado
-app.use(cors({ origin: '*', credentials: true, maxAge: 86400 }));
+// In-memory storage
+const sessions = new Map();
+const messageCache = new Map();
+const profilePicCache = new Map();
 
-// ⚡ PERFORMANCE: Limite de payload menor
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+console.log('========================================');
+console.log('🚀 BACKEND v65 - MEDIA + REALTIME ACK');
+console.log('========================================');
 
-// ⚡ PERFORMANCE: Cache em memória
-let whatsappClients = {};
-let wsClients = {};
-let messagesCache = {}; // Cache de mensagens
-let chatsCache = {}; // Cache de chats
-
-// ⚡ PERFORMANCE: Limpa cache a cada 30 minutos
-setInterval(() => {
-  const now = Date.now();
-  for (const sessionId in messagesCache) {
-    if (now - messagesCache[sessionId].timestamp > 1800000) {
-      delete messagesCache[sessionId];
-    }
-  }
-  for (const sessionId in chatsCache) {
-    if (now - chatsCache[sessionId].timestamp > 1800000) {
-      delete chatsCache[sessionId];
-    }
-  }
-}, 1800000);
-
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: Date.now() });
-});
-
-const server = app.listen(PORT, () => {
-  console.log('========================================');
-  console.log('🚀 BACKEND v63 - QR CODE FIX + ULTRA PERFORMANCE');
-  console.log('========================================');
-  console.log('⚡ Port:', PORT);
-  console.log('⚡ Time:', new Date().toISOString());
-  console.log('⚡ Compression: ENABLED');
-  console.log('⚡ Cache: ENABLED');
-  console.log('========================================');
-});
-
-const wss = new WebSocketServer({ server, path: '/api/whatsapp' });
-
-wss.on('connection', (ws, req) => {
-  const url = new URL(req.url, 'http://' + req.headers.host);
-  const sessionId = url.searchParams.get('sessionId');
-  
-  if (!sessionId) {
-    ws.close(1008, 'No sessionId');
-    return;
-  }
-  
-  console.log('📱 WS connected:', sessionId);
-  
-  if (!wsClients[sessionId]) wsClients[sessionId] = new Set();
-  wsClients[sessionId].add(ws);
-  
-  const client = whatsappClients[sessionId];
-  
-  if (client) {
-    ws.send(JSON.stringify({ event: 'status', status: client.status }));
-    
-    if (client.currentQR) {
-      ws.send(JSON.stringify({ event: 'qr', qr: client.currentQR }));
-    }
-    
-    if (client.status === 'ready') {
-      ws.send(JSON.stringify({ event: 'session.ready' }));
-    }
-  }
-  
-  const ping = setInterval(() => {
-    if (ws.readyState === 1) {
-      ws.send(JSON.stringify({ event: 'ping' }));
-    }
-  }, 30000);
-  
-  ws.on('close', () => {
-    clearInterval(ping);
-    if (wsClients[sessionId]) {
-      wsClients[sessionId].delete(ws);
-      if (wsClients[sessionId].size === 0) delete wsClients[sessionId];
-    }
-  });
-  
-  ws.on('error', () => clearInterval(ping));
-});
-
-function broadcast(sessionId, data) {
-  const clients = wsClients[sessionId];
-  if (clients) {
-    const msg = JSON.stringify(data);
-    clients.forEach(ws => {
-      if (ws.readyState === 1) {
-        try { ws.send(msg); } catch (e) {}
-      }
+// Get or create session
+function getSession(sessionId) {
+  if (!sessions.has(sessionId)) {
+    sessions.set(sessionId, {
+      client: null,
+      qr: null,
+      ready: false,
+      status: 'disconnected',
+      info: null
     });
   }
+  return sessions.get(sessionId);
 }
 
-app.delete('/api/sessions/:sessionId', async (req, res) => {
-  const { sessionId } = req.params;
-  
-  try {
-    const client = whatsappClients[sessionId];
-    
-    if (client?.whatsappClient) {
-      await client.whatsappClient.destroy();
-    }
-    
-    delete whatsappClients[sessionId];
-    delete messagesCache[sessionId];
-    delete chatsCache[sessionId];
-    
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', version: '65', sessions: sessions.size });
 });
 
+// Start session
 app.post('/api/sessions/:sessionId/start', async (req, res) => {
   const { sessionId } = req.params;
-  
-  console.log('🔵 START:', sessionId);
-  
-  try {
-    const existingSession = whatsappClients[sessionId];
-    
-    if (existingSession?.whatsappClient) {
-      await existingSession.whatsappClient.destroy();
-      delete whatsappClients[sessionId];
-      await new Promise(r => setTimeout(r, 2000));
-    }
-    
-    initWhatsApp(sessionId);
-    
-    res.json({ success: true, session_id: sessionId });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  const session = getSession(sessionId);
+
+  if (session.client && session.ready) {
+    return res.json({ success: true, status: 'ready' });
   }
-});
 
-app.get('/api/sessions/:sessionId/status', (req, res) => {
-  const { sessionId } = req.params;
-  const client = whatsappClients[sessionId];
-  
-  res.json({ 
-    ready: client?.status === 'ready',
-    status: client?.status || 'disconnected',
-    qr_base64: client?.currentQR || null,
-    timestamp: Date.now()
-  });
-});
-
-// ⚡ PERFORMANCE: Cache de threads
-app.get('/api/sessions/:sessionId/threads', async (req, res) => {
-  const { sessionId } = req.params;
-  const limit = parseInt(req.query.limit) || 50;
-  
-  try {
-    const client = whatsappClients[sessionId];
-    if (!client || client.status !== 'ready') {
-      return res.status(400).json({ error: 'Not ready' });
-    }
-    
-    // Verifica cache (válido por 10 segundos)
-    const cachedData = chatsCache[sessionId];
-    if (cachedData && (Date.now() - cachedData.timestamp < 10000)) {
-      console.log('✅ Using cached threads');
-      return res.json({ threads: cachedData.threads });
-    }
-    
-    console.log('📂 Loading threads from WhatsApp...');
-    const startTime = Date.now();
-    
-    const chats = await client.whatsappClient.getChats();
-    const threads = [];
-    
-    // ⚡ PERFORMANCE: Processa apenas o necessário
-    const limitedChats = chats.slice(0, limit);
-    
-    for (const chat of limitedChats) {
-      threads.push({
-        jid: chat.id._serialized,
-        name: chat.name || chat.id.user || 'Unknown',
-        is_group: chat.isGroup,
-        unread_count: chat.unreadCount || 0,
-        last_message: chat.lastMessage ? {
-          text: chat.lastMessage.body || '',
-          timestamp: chat.lastMessage.timestamp * 1000
-        } : null
-      });
-    }
-    
-    threads.sort((a, b) => (b.last_message?.timestamp || 0) - (a.last_message?.timestamp || 0));
-    
-    // Salva no cache
-    chatsCache[sessionId] = {
-      threads,
-      timestamp: Date.now()
-    };
-    
-    const duration = Date.now() - startTime;
-    console.log(`✅ Threads loaded in ${duration}ms`);
-    
-    res.json({ threads });
-  } catch (error) {
-    console.error('❌ Threads error:', error);
-    res.status(500).json({ error: error.message });
+  if (session.client) {
+    return res.json({ success: true, status: session.status });
   }
-});
 
-// ⚡ PERFORMANCE: Cache de mensagens + limite menor
-app.get('/api/sessions/:sessionId/messages/:jid/history', async (req, res) => {
-  const { sessionId, jid } = req.params;
-  const limit = parseInt(req.query.limit) || 30; // Reduzido de 50 para 30
-  
   try {
-    const client = whatsappClients[sessionId];
-    if (!client || client.status !== 'ready') {
-      return res.status(400).json({ error: 'Not ready' });
-    }
+    session.status = 'initializing';
     
-    const cacheKey = sessionId + ':' + jid;
-    const cachedData = messagesCache[cacheKey];
-    
-    // Cache válido por 5 segundos
-    if (cachedData && (Date.now() - cachedData.timestamp < 5000)) {
-      console.log('✅ Using cached messages');
-      return res.json({ messages: cachedData.messages });
-    }
-    
-    console.log('📥 Loading messages from WhatsApp...');
-    const startTime = Date.now();
-    
-    const chat = await client.whatsappClient.getChatById(jid);
-    if (!chat) return res.status(404).json({ error: 'Not found' });
-    
-    const messages = await chat.fetchMessages({ limit });
-    const formatted = [];
-    
-    // ⚡ PERFORMANCE: Processa mídias apenas se necessário
-    for (const msg of messages) {
-      const msgData = {
-        id: msg.id._serialized,
-        text: msg.body || '',
-        from_me: msg.fromMe,
-        timestamp: msg.timestamp * 1000,
-        type: msg.type,
-        ack: msg.ack || 0,
-        has_media: msg.hasMedia,
-        media_url: null,
-        media_type: null
-      };
-      
-      // Não baixa mídia automaticamente - só quando solicitado
-      if (msg.hasMedia && msg.type === 'image') {
-        msgData.media_placeholder = true;
-      }
-      
-      formatted.push(msgData);
-    }
-    
-    formatted.sort((a, b) => a.timestamp - b.timestamp);
-    
-    // Salva no cache
-    messagesCache[cacheKey] = {
-      messages: formatted,
-      timestamp: Date.now()
-    };
-    
-    const duration = Date.now() - startTime;
-    console.log(`✅ Messages loaded in ${duration}ms`);
-    
-    res.json({ messages: formatted });
-  } catch (error) {
-    console.error('❌ Messages error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ⚡ PERFORMANCE: Envio otimizado
-app.post('/api/sessions/:sessionId/messages/text', async (req, res) => {
-  const { sessionId } = req.params;
-  const { to, text } = req.body;
-  
-  try {
-    const client = whatsappClients[sessionId];
-    if (!client || client.status !== 'ready') {
-      return res.status(400).json({ error: 'Not ready' });
-    }
-    
-    const chatId = to.includes('@') ? to : to + '@c.us';
-    
-    console.log('📤 Sending:', to);
-    const startTime = Date.now();
-    
-    const sent = await client.whatsappClient.sendMessage(chatId, text);
-    
-    const duration = Date.now() - startTime;
-    console.log(`✅ Sent in ${duration}ms`);
-    
-    // Broadcast instantâneo
-    broadcast(sessionId, {
-      event: 'message.out',
-      data: {
-        id: sent.id._serialized,
-        to: chatId,
-        text: text,
-        timestamp: sent.timestamp * 1000,
-        ack: sent.ack || 1
-      }
-    });
-    
-    // Limpa cache para forçar atualização
-    delete chatsCache[sessionId];
-    
-    res.json({ success: true, message_id: sent.id._serialized });
-  } catch (error) {
-    console.error('❌ Send error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/sessions/:sessionId/messages/media', async (req, res) => {
-  const { sessionId } = req.params;
-  const { to, caption, mediaData, mimetype, filename } = req.body;
-  
-  try {
-    const client = whatsappClients[sessionId];
-    if (!client || client.status !== 'ready') {
-      return res.status(400).json({ error: 'Not ready' });
-    }
-    
-    const chatId = to.includes('@') ? to : to + '@c.us';
-    const media = new MessageMedia(mimetype, mediaData, filename);
-    const sent = await client.whatsappClient.sendMessage(chatId, media, { caption: caption || '' });
-    
-    broadcast(sessionId, {
-      event: 'message.out',
-      data: {
-        id: sent.id._serialized,
-        to: chatId,
-        text: caption || '[Media]',
-        timestamp: sent.timestamp * 1000,
-        ack: sent.ack || 1,
-        has_media: true
-      }
-    });
-    
-    delete chatsCache[sessionId];
-    
-    res.json({ success: true, message_id: sent.id._serialized });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-async function initWhatsApp(sessionId) {
-  console.log('🎬 INIT:', sessionId);
-  
-  try {
-    whatsappClients[sessionId] = {
-      status: 'initializing',
-      currentQR: null,
-      whatsappClient: null
-    };
-
     const client = new Client({
       authStrategy: new LocalAuth({ clientId: sessionId }),
       puppeteer: {
@@ -394,122 +68,354 @@ async function initWhatsApp(sessionId) {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu'
+          '--disable-gpu',
+          '--single-process'
         ]
       }
     });
-    
+
     client.on('qr', async (qr) => {
-      console.log('📱 QR generated');
-      whatsappClients[sessionId].status = 'qr_ready';
-      whatsappClients[sessionId].currentQR = await qrcode.toDataURL(qr, {
-        errorCorrectionLevel: 'H',
-        margin: 1,
-        width: 400
-      });
-      
-      broadcast(sessionId, { event: 'qr', qr: whatsappClients[sessionId].currentQR });
+      console.log(`[${sessionId}] QR Code generated`);
+      session.qr = await qrcode.toDataURL(qr);
+      session.status = 'qr_ready';
     });
-    
-    client.on('authenticated', () => {
-      console.log('🔐 Authenticated:', sessionId);
-      whatsappClients[sessionId].status = 'authenticated';
-      broadcast(sessionId, { event: 'authenticated' });
-    });
-    
+
     client.on('ready', () => {
-      console.log('✅ Ready:', sessionId);
-      whatsappClients[sessionId].status = 'ready';
-      whatsappClients[sessionId].currentQR = null;
-      broadcast(sessionId, { event: 'session.ready' });
+      console.log(`[${sessionId}] Client ready!`);
+      session.ready = true;
+      session.status = 'ready';
+      session.qr = null;
+      session.info = client.info;
     });
-    
-    client.on('message', async (message) => {
-      // ⚡ PERFORMANCE: Não baixa mídia automaticamente
-      const msgData = {
-        from: message.from,
-        id: message.id._serialized,
-        text: message.body || '',
-        from_me: message.fromMe,
-        timestamp: message.timestamp * 1000,
-        ack: message.ack || 0,
-        has_media: message.hasMedia,
-        media_url: null,
-        media_type: null,
-        contact_name: message._data?.notifyName || '',
-        is_new: true
-      };
-      
-      broadcast(sessionId, { event: 'message.in', data: msgData });
-      
-      // Limpa cache
-      delete messagesCache[sessionId + ':' + message.from];
-      delete chatsCache[sessionId];
+
+    client.on('authenticated', () => {
+      console.log(`[${sessionId}] Authenticated`);
+      session.status = 'authenticated';
     });
-    
-    client.on('message_ack', (message, ack) => {
-      broadcast(sessionId, {
-        event: 'message.status',
-        data: {
-          id: message.id._serialized,
-          from: message.from || message.to,
-          ack: ack
+
+    client.on('auth_failure', () => {
+      console.log(`[${sessionId}] Auth failed`);
+      session.status = 'auth_failure';
+      session.ready = false;
+    });
+
+    client.on('disconnected', (reason) => {
+      console.log(`[${sessionId}] Disconnected:`, reason);
+      session.status = 'disconnected';
+      session.ready = false;
+      session.client = null;
+    });
+
+    // Track message ACK updates in realtime
+    client.on('message_ack', (msg, ack) => {
+      const cacheKey = `${sessionId}_${msg.from || msg.to}`;
+      const cached = messageCache.get(cacheKey);
+      if (cached) {
+        const msgIndex = cached.findIndex(m => m.id === msg.id._serialized);
+        if (msgIndex !== -1) {
+          cached[msgIndex].ack = ack;
         }
-      });
+      }
     });
+
+    session.client = client;
+    await client.initialize();
+
+    res.json({ success: true, status: 'initializing' });
+  } catch (error) {
+    console.error(`[${sessionId}] Start error:`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get session status
+app.get('/api/sessions/:sessionId/status', (req, res) => {
+  const { sessionId } = req.params;
+  const session = getSession(sessionId);
+  
+  res.json({
+    status: session.status,
+    ready: session.ready,
+    qr_base64: session.qr,
+    info: session.info
+  });
+});
+
+// Logout from WhatsApp (like WhatsApp Web disconnect)
+app.post('/api/sessions/:sessionId/logout', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  
+  if (session?.client) {
+    try {
+      await session.client.logout();
+      console.log(`[${sessionId}] Logged out from WhatsApp`);
+    } catch (e) {
+      console.log(`[${sessionId}] Logout error:`, e.message);
+    }
+  }
+  
+  res.json({ success: true });
+});
+
+// Delete session
+app.delete('/api/sessions/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  
+  if (session?.client) {
+    try {
+      await session.client.logout();
+      await session.client.destroy();
+    } catch (e) {}
+  }
+  
+  sessions.delete(sessionId);
+  
+  // Clear caches
+  for (const key of messageCache.keys()) {
+    if (key.startsWith(sessionId)) messageCache.delete(key);
+  }
+  for (const key of profilePicCache.keys()) {
+    if (key.startsWith(sessionId)) profilePicCache.delete(key);
+  }
+  
+  res.json({ success: true });
+});
+
+// Get profile picture
+app.get('/api/sessions/:sessionId/profile-pic/:jid', async (req, res) => {
+  const { sessionId, jid } = req.params;
+  const session = sessions.get(sessionId);
+  
+  if (!session?.ready) {
+    return res.status(404).send('Session not ready');
+  }
+
+  try {
+    // Check cache first
+    const cacheKey = `${sessionId}_${jid}`;
+    if (profilePicCache.has(cacheKey)) {
+      const cached = profilePicCache.get(cacheKey);
+      if (cached.expires > Date.now()) {
+        return res.redirect(cached.url);
+      }
+    }
+
+    const url = await session.client.getProfilePicUrl(jid);
+    if (url) {
+      // Cache for 1 hour
+      profilePicCache.set(cacheKey, { url, expires: Date.now() + 3600000 });
+      return res.redirect(url);
+    }
     
-    // ⚡ PRESENCE: Atualização de status online/offline
-    client.on('change_state', (state) => {
-      console.log('🔄 State:', state);
+    res.status(404).send('No profile pic');
+  } catch (error) {
+    res.status(404).send('Profile pic not found');
+  }
+});
+
+// Get threads/chats
+app.get('/api/sessions/:sessionId/threads', async (req, res) => {
+  const { sessionId } = req.params;
+  const { limit = 50 } = req.query;
+  const session = sessions.get(sessionId);
+
+  if (!session?.ready) {
+    return res.status(400).json({ error: 'Session not ready' });
+  }
+
+  try {
+    const chats = await session.client.getChats();
+    const threads = await Promise.all(
+      chats.slice(0, parseInt(limit)).map(async (chat) => {
+        let profilePic = null;
+        try {
+          profilePic = await session.client.getProfilePicUrl(chat.id._serialized);
+        } catch {}
+
+        return {
+          jid: chat.id._serialized,
+          name: chat.name || chat.id.user,
+          is_group: chat.isGroup,
+          unread_count: chat.unreadCount,
+          last_message: chat.lastMessage ? {
+            text: chat.lastMessage.body,
+            timestamp: chat.lastMessage.timestamp * 1000,
+            from_me: chat.lastMessage.fromMe
+          } : null,
+          profile_pic: profilePic
+        };
+      })
+    );
+
+    res.json({ threads });
+  } catch (error) {
+    console.error('Get threads error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get messages with media URLs
+app.get('/api/sessions/:sessionId/messages/:chatId/history', async (req, res) => {
+  const { sessionId, chatId } = req.params;
+  const { limit = 50 } = req.query;
+  const session = sessions.get(sessionId);
+
+  if (!session?.ready) {
+    return res.status(400).json({ error: 'Session not ready' });
+  }
+
+  try {
+    const chat = await session.client.getChatById(chatId);
+    const msgs = await chat.fetchMessages({ limit: parseInt(limit) });
+    
+    const messages = await Promise.all(msgs.map(async (msg) => {
+      let mediaUrl = null;
+      let mediaType = msg.type;
+      
+      // Download media and convert to base64 for images/audio
+      if (msg.hasMedia) {
+        try {
+          const media = await msg.downloadMedia();
+          if (media) {
+            mediaUrl = `data:${media.mimetype};base64,${media.data}`;
+            if (media.mimetype.startsWith('image/')) mediaType = 'image';
+            else if (media.mimetype.startsWith('video/')) mediaType = 'video';
+            else if (media.mimetype.startsWith('audio/')) mediaType = 'audio';
+          }
+        } catch (e) {
+          console.log('Media download failed:', e.message);
+        }
+      }
+
+      return {
+        id: msg.id._serialized,
+        text: msg.body,
+        caption: msg.caption || '',
+        from_me: msg.fromMe,
+        timestamp: msg.timestamp * 1000,
+        ack: msg.ack,
+        has_media: msg.hasMedia,
+        media_url: mediaUrl,
+        media_type: mediaType,
+        mimetype: msg.mimetype || ''
+      };
+    }));
+
+    // Cache messages
+    const cacheKey = `${sessionId}_${chatId}`;
+    messageCache.set(cacheKey, messages);
+
+    res.json({ messages });
+  } catch (error) {
+    console.error('Get messages error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send text message
+app.post('/api/sessions/:sessionId/messages/text', async (req, res) => {
+  const { sessionId } = req.params;
+  const { to, text } = req.body;
+  const session = sessions.get(sessionId);
+
+  if (!session?.ready) {
+    return res.status(400).json({ error: 'Session not ready' });
+  }
+
+  try {
+    const result = await session.client.sendMessage(to, text);
+    res.json({ 
+      success: true, 
+      message_id: result.id._serialized,
+      timestamp: result.timestamp
     });
+  } catch (error) {
+    console.error('Send text error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send media message
+app.post('/api/sessions/:sessionId/messages/media', async (req, res) => {
+  const { sessionId } = req.params;
+  const { to, media_url, media_type, caption, filename } = req.body;
+  const session = sessions.get(sessionId);
+
+  if (!session?.ready) {
+    return res.status(400).json({ error: 'Session not ready' });
+  }
+
+  try {
+    let media;
     
-    // Monitora presença de contatos
-    setInterval(async () => {
-      try {
-        const chats = await client.getChats();
-        for (const chat of chats.slice(0, 20)) {
-          if (!chat.isGroup) {
-            const contact = await chat.getContact();
-            if (contact) {
-              broadcast(sessionId, {
-                event: 'presence.update',
-                data: {
-                  jid: chat.id._serialized,
-                  isOnline: contact.isOnline || false,
-                  lastSeen: contact.lastSeen || null
-                }
-              });
-            }
+    if (media_url.startsWith('data:')) {
+      // Base64 data
+      const matches = media_url.match(/^data:(.+);base64,(.+)$/);
+      if (matches) {
+        media = new MessageMedia(matches[1], matches[2], filename);
+      }
+    } else {
+      // URL - download first
+      media = await MessageMedia.fromUrl(media_url, { unsafeMime: true });
+      if (filename) media.filename = filename;
+    }
+
+    const options = {};
+    if (caption) options.caption = caption;
+    if (media_type === 'audio') {
+      options.sendAudioAsVoice = true;
+    }
+
+    const result = await session.client.sendMessage(to, media, options);
+    res.json({ 
+      success: true, 
+      message_id: result.id._serialized,
+      timestamp: result.timestamp
+    });
+  } catch (error) {
+    console.error('Send media error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Download media by message ID
+app.get('/api/sessions/:sessionId/media/:messageId', async (req, res) => {
+  const { sessionId, messageId } = req.params;
+  const session = sessions.get(sessionId);
+
+  if (!session?.ready) {
+    return res.status(400).json({ error: 'Session not ready' });
+  }
+
+  try {
+    // Find message in cache or fetch
+    let msg = null;
+    for (const [key, messages] of messageCache.entries()) {
+      if (key.startsWith(sessionId)) {
+        const found = messages.find(m => m.id === messageId);
+        if (found && found.media_url) {
+          // Return cached media
+          const base64Match = found.media_url.match(/^data:(.+);base64,(.+)$/);
+          if (base64Match) {
+            const buffer = Buffer.from(base64Match[2], 'base64');
+            res.set('Content-Type', base64Match[1]);
+            return res.send(buffer);
           }
         }
-      } catch (e) {}
-    }, 30000); // A cada 30 segundos
-    
-    client.on('disconnected', (reason) => {
-      console.log('🔴 Disconnected:', sessionId, reason);
-      
-      if (whatsappClients[sessionId]?.whatsappClient) {
-        whatsappClients[sessionId].whatsappClient.destroy().catch(() => {});
       }
-      
-      delete whatsappClients[sessionId];
-      delete messagesCache[sessionId];
-      delete chatsCache[sessionId];
-      
-      broadcast(sessionId, { event: 'disconnected', reason });
-    });
-    
-    whatsappClients[sessionId].whatsappClient = client;
-    
-    await client.initialize();
-    console.log('✅ Initialized:', sessionId);
-    
-  } catch (error) {
-    console.error('❌ Init error:', error);
-    
-    if (whatsappClients[sessionId]) {
-      whatsappClients[sessionId].status = 'error';
     }
-    broadcast(sessionId, { event: 'error', message: error.message });
+    
+    res.status(404).json({ error: 'Media not found' });
+  } catch (error) {
+    console.error('Get media error:', error);
+    res.status(500).json({ error: error.message });
   }
-}
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log('Ready to accept WhatsApp connections!');
+});
