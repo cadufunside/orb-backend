@@ -1,4 +1,4 @@
-// ⚡ BACKEND v61 - ULTRA PERFORMANCE + PRESENÇA!
+// ⚡ BACKEND v63 - QR CODE FIX + ULTRA PERFORMANCE!
 import express from 'express';
 import cors from 'cors';
 import pkg from 'whatsapp-web.js';
@@ -47,7 +47,7 @@ app.get('/api/health', (req, res) => {
 
 const server = app.listen(PORT, () => {
   console.log('========================================');
-  console.log('🚀 BACKEND v61 - ULTRA PERFORMANCE + PRESENÇA');
+  console.log('🚀 BACKEND v63 - QR CODE FIX + ULTRA PERFORMANCE');
   console.log('========================================');
   console.log('⚡ Port:', PORT);
   console.log('⚡ Time:', new Date().toISOString());
